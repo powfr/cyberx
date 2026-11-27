@@ -36,10 +36,17 @@ const TOP: f64 = 114.0;
 
 /// Marge de redimensionnement autour de la fenêtre (sans bordure Windows).
 const BORDER: f64 = 4.0;
+/// Disposition « barre latérale » : largeur de la barre et marge autour de la page.
+const SIDE_W: f64 = 264.0;
+const CARD_GAP: f64 = 8.0;
+/// Page « Nouvel onglet », servie par le protocole interne `cyberx`.
+const NEWTAB_URL: &str = "http://cyberx.newtab/";
+const NEWTAB_PRIVATE_URL: &str = "http://cyberx.newtab/private";
 
 const UI_HTML: &str = include_str!("ui.html");
 const NEWTAB_HTML: &str = include_str!("newtab.html");
 const SUGGEST_HTML: &str = include_str!("suggest.html");
+const PALETTE_HTML: &str = include_str!("palette.html");
 const LOGO_SVG: &str = include_str!("../assets/logo.svg");
 
 /// Script injecté dans les pages web : raccourcis clavier quand une page a le focus.
@@ -55,6 +62,7 @@ const SHORTCUTS_JS: &str = r#"
     else if (c && k === 'd') s = 'bookmark';
     else if (c && k === 'h') s = 'history';
     else if (c && k === 'tab') s = e.shiftKey ? 'prev_tab' : 'next_tab';
+    else if (c && k === 'k') s = 'palette';
     if (s && window.ipc) { e.preventDefault(); e.stopPropagation(); window.ipc.postMessage(s); }
   }, true);
 })();
@@ -145,6 +153,11 @@ struct Browser {
     update_msg: Option<String>,
     /// Liste de suggestions affichée sous la barre d'adresse (créée au premier usage).
     suggest: Option<WebView>,
+    /// Palette de commandes (Ctrl+K), créée au premier usage.
+    palette: Option<WebView>,
+    palette_open: std::cell::Cell<bool>,
+    /// Contenu de la page « Nouvel onglet » : [normal, privé].
+    newtab: Rc<RefCell<[String; 2]>>,
     vault: passwords::Vault,
     store: Store,
     ad: Rc<RefCell<AdState>>,
@@ -159,13 +172,17 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
     }
 }
 
+fn is_internal(url: &str) -> bool {
+    url.starts_with("http://cyberx.") || url.starts_with("https://cyberx.")
+}
+
 fn is_web(url: &str) -> bool {
-    url.starts_with("http://") || url.starts_with("https://")
+    (url.starts_with("http://") || url.starts_with("https://")) && !is_internal(url)
 }
 
 /// Ce qu'on affiche dans la barre d'adresse (rien pour la page « Nouvel onglet »).
 fn display_url(url: &str) -> String {
-    if url.starts_with("data:") || url.starts_with("about:") {
+    if url.starts_with("data:") || url.starts_with("about:") || is_internal(url) {
         String::new()
     } else {
         url.to_string()
@@ -185,21 +202,6 @@ fn encode_query(s: &str) -> String {
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{b:02X}")),
         }
-    }
-    out
-}
-
-fn base64(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
-    for c in data.chunks(3) {
-        let b1 = *c.get(1).unwrap_or(&0);
-        let b2 = *c.get(2).unwrap_or(&0);
-        let n = ((c[0] as u32) << 16) | ((b1 as u32) << 8) | (b2 as u32);
-        out.push(T[((n >> 18) & 63) as usize] as char);
-        out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(if c.len() > 1 { T[((n >> 6) & 63) as usize] as char } else { '=' });
-        out.push(if c.len() > 2 { T[(n & 63) as usize] as char } else { '=' });
     }
     out
 }
@@ -235,7 +237,8 @@ impl Browser {
             .replace("{{ENGINE_NAME}}", &js_json(&json!(engine.name)))
             .replace("{{TILES}}", &js_json(&json!(tiles)))
             .replace("{{PRIVATE}}", if private { "true" } else { "false" });
-        format!("data:text/html;charset=utf-8;base64,{}", base64(html.as_bytes()))
+        self.newtab.borrow_mut()[private as usize] = html;
+        if private { NEWTAB_PRIVATE_URL } else { NEWTAB_URL }.to_string()
     }
 
     fn create_tab(&mut self, url: Option<String>, private: bool) {
@@ -248,6 +251,7 @@ impl Browser {
         let p_ipc = self.proxy.clone();
         let p_load = self.proxy.clone();
         let p_title = self.proxy.clone();
+        let newtab = self.newtab.clone();
 
         // Onglet de l'espace secret : cookies et connexions séparés de l'espace normal.
         let builder = match self.secret_ctx.as_mut() {
@@ -256,11 +260,21 @@ impl Browser {
         };
         let built = builder
             .with_url(start.clone())
-            .with_bounds(rect(0.0, TOP, w, h - TOP))
+            .with_bounds(rect(0.0, TOP, w, (h - TOP).max(1.0)))
             .with_visible(false)
             .with_incognito(private)
             .with_initialization_script(SHORTCUTS_JS)
             .with_initialization_script(YOUTUBE_JS)
+            // Pages internes : http://cyberx.newtab/ (et /private).
+            .with_custom_protocol("cyberx".into(), move |_id, req| {
+                let private = req.uri().path().starts_with("/private");
+                let body = newtab.borrow()[private as usize].clone().into_bytes();
+                wry::http::Response::builder()
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .header("Cache-Control", "no-store")
+                    .body(std::borrow::Cow::Owned(body))
+                    .unwrap()
+            })
             .with_ipc_handler(move |req: Request<String>| {
                 let _ = p_ipc.send_event(UserEvent::Shortcut(id, req.body().clone()));
             })
@@ -328,6 +342,7 @@ impl Browser {
     fn layout(&self) {
         if self.panel_open || self.fullscreen {
             self.hide_suggest();
+            self.hide_palette();
         }
         let (w, h) = self.logical_size();
         if self.fullscreen {
@@ -340,13 +355,25 @@ impl Browser {
         }
         // Fenêtre non maximisée : une fine marge autour sert à la redimensionner.
         let b = if self.window.is_maximized() { 0.0 } else { BORDER };
-        let ui_h = if self.panel_open { h - 2.0 * b } else { TOP - b };
-        let _ = self.ui.set_bounds(rect(b, b, w - 2.0 * b, ui_h));
+        let page = if self.side_layout() {
+            // Barre latérale à gauche, page en « carte » détachée du bord.
+            let ui_w = if self.panel_open { w - 2.0 * b } else { SIDE_W };
+            let _ = self.ui.set_bounds(rect(b, b, ui_w, h - 2.0 * b));
+            (b + SIDE_W, b + CARD_GAP, w - 2.0 * b - SIDE_W - CARD_GAP, h - 2.0 * b - 2.0 * CARD_GAP)
+        } else {
+            let ui_h = if self.panel_open { h - 2.0 * b } else { TOP - b };
+            let _ = self.ui.set_bounds(rect(b, b, w - 2.0 * b, ui_h));
+            (b, TOP, w - 2.0 * b, h - TOP - b)
+        };
         let _ = self.ui.set_visible(true);
         for (i, t) in self.tabs.iter().enumerate() {
-            let _ = t.webview.set_bounds(rect(b, TOP, w - 2.0 * b, h - TOP - b));
+            let _ = t.webview.set_bounds(rect(page.0, page.1, page.2, page.3));
             let _ = t.webview.set_visible(i == self.active && !self.panel_open);
         }
+    }
+
+    fn side_layout(&self) -> bool {
+        self.store.settings.layout == "side"
     }
 
     fn set_fullscreen(&mut self, on: bool) {
@@ -564,6 +591,78 @@ impl Browser {
         self.update_msg = Some("✓ Nouveau code secret enregistré. Retiens-le bien : sans lui, cet espace est illisible.".into());
     }
 
+    // ---------------- Palette de commandes (Ctrl+K) ----------------
+
+    fn hide_palette(&self) {
+        if let Some(p) = &self.palette {
+            let _ = p.set_visible(false);
+        }
+        self.palette_open.set(false);
+    }
+
+    fn palette_visible(&self) -> bool {
+        self.palette_open.get()
+    }
+
+    fn close_palette(&self) {
+        if self.palette_visible() {
+            self.hide_palette();
+            if let Some(t) = self.active_tab() {
+                let _ = t.webview.focus();
+            }
+        }
+    }
+
+    fn toggle_palette(&mut self) {
+        if self.palette_visible() {
+            self.close_palette();
+            return;
+        }
+        if self.fullscreen {
+            return;
+        }
+        self.panel_open = false;
+        self.layout();
+        self.hide_suggest();
+        if self.palette.is_none() {
+            let p = self.proxy.clone();
+            self.palette = WebViewBuilder::new()
+                .with_html(PALETTE_HTML)
+                .with_visible(false)
+                .with_bounds(rect(0.0, 0.0, 10.0, 10.0))
+                .with_ipc_handler(move |req: Request<String>| {
+                    let _ = p.send_event(UserEvent::UiIpc(req.body().clone()));
+                })
+                .build_as_child(&self.window)
+                .ok();
+        }
+        let Some(palette) = &self.palette else { return };
+        let (w, h) = self.logical_size();
+        let pw = (w - 80.0).min(680.0);
+        let ph = (h - 140.0).min(470.0);
+        let _ = palette.set_bounds(rect((w - pw) / 2.0, 70.0, pw, ph));
+        let tabs: Vec<Value> = self
+            .tabs
+            .iter()
+            .map(|t| json!({ "id": t.id, "title": t.title, "url": display_url(&t.url), "private": t.private }))
+            .collect();
+        let history: Vec<&storage::HistoryEntry> = self.store.history.iter().rev().take(800).collect();
+        let data = json!({
+            "tabs": tabs,
+            "bookmarks": self.store.bookmarks,
+            "history": history,
+            "themes": themes::list(),
+            "theme": themes::vars(&self.store.settings.theme),
+            "engine": themes::engine(&self.store.settings.search).name,
+        });
+        let _ = palette.evaluate_script(&format!("open_palette({})", js_json(&data)));
+        let _ = palette.set_visible(true);
+        self.palette_open.set(true);
+        #[cfg(windows)]
+        shield_win::bring_to_front(palette);
+        let _ = palette.focus();
+    }
+
     // ---------------- Suggestions de la barre d'adresse ----------------
 
     fn hide_suggest(&self) {
@@ -745,9 +844,10 @@ impl Browser {
             "history" => self.open_panel("history"),
             "next_tab" => self.cycle_tab(true),
             "prev_tab" => self.cycle_tab(false),
+            "palette" => self.toggle_palette(),
             // Recherche depuis la page « Nouvel onglet » (seulement depuis cette page).
             s if s.starts_with("nav:") => {
-                let from_newtab = self.active_tab().map(|t| t.url.starts_with("data:")).unwrap_or(false);
+                let from_newtab = self.active_tab().map(|t| t.url.starts_with("http://cyberx.newtab")).unwrap_or(false);
                 let value = &s[4..];
                 if from_newtab && !self.try_secret(value) {
                     let private = self.active_tab().map(|t| t.private).unwrap_or(false);
@@ -820,6 +920,17 @@ impl Browser {
             }
             "clear_history" => self.store.clear_history(),
             "suggest" => self.show_suggest(&v),
+            "palette" => self.toggle_palette(),
+            "palette_close" => self.close_palette(),
+            "open_section" => self.open_panel(&str_arg("section")),
+            "set_layout" => {
+                let id = str_arg("id");
+                if id == "side" || id == "classic" {
+                    self.store.settings.layout = id;
+                    self.store.save_settings();
+                    self.layout();
+                }
+            }
             "import_passwords" => {
                 self.update_msg = Some(match self.vault.import_csv(&str_arg("csv")) {
                     Ok(n) => format!(
@@ -960,6 +1071,7 @@ impl Browser {
             "panelOpen": self.panel_open,
             "secret": self.secret_code.is_some(),
             "maximized": self.window.is_maximized(),
+            "layout": self.store.settings.layout,
             "passwordCount": self.vault.creds.len(),
             "version": updater::VERSION,
             "update": self.update.as_ref().map(|(v, _)| v.clone()),
@@ -1026,6 +1138,9 @@ fn main() {
         update: None,
         update_msg: None,
         suggest: None,
+        palette: None,
+        palette_open: std::cell::Cell::new(false),
+        newtab: Rc::new(RefCell::new([String::new(), String::new()])),
         vault: passwords::Vault::load(&Store::load().dir()),
         secret_ctx: None,
         secret_code: None,

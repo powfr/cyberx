@@ -33,11 +33,13 @@ pub struct Settings {
     pub adblock: bool,
     /// Sites sur lesquels le bouclier est désactivé.
     pub allowlist: Vec<String>,
+    /// Disposition : "classic" (onglets en haut) ou "side" (barre latérale).
+    pub layout: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "cyber".into(), search: "duckduckgo".into(), adblock: true, allowlist: Vec::new() }
+        Self { theme: "cyber".into(), search: "duckduckgo".into(), adblock: true, allowlist: Vec::new(), layout: "classic".into() }
     }
 }
 

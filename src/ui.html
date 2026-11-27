@@ -100,6 +100,49 @@
 
   /* ---------- Panneau (historique, favoris, paramètres) ---------- */
   #panel { flex:1; display:none; min-height:0; background:var(--bg); }
+  #chrome { display:flex; flex-direction:column; flex:none; }
+
+  /* ---------- Finitions modernes ---------- */
+  .btn, .tab, .bm, .newtab, #winctl button { transition: background .12s, color .12s, opacity .12s; }
+  .btn:active, .newtab:active { transform: scale(.94); }
+  #toolbar { border-top: 1px solid color-mix(in srgb, var(--text) 4%, transparent); }
+  .tab.active { box-shadow: 0 -1px 0 0 var(--accent) inset, 0 6px 16px rgba(0,0,0,.18); }
+
+  /* ---------- Disposition « barre latérale » ---------- */
+  body.side { flex-direction:row; }
+  body.side #chrome { width:264px; height:100%; display:grid; grid-template-columns:1fr 1fr;
+                      grid-template-rows:auto auto auto 1fr auto auto; padding:0 8px 8px 8px; gap:0;
+                      background:var(--bg); }
+  body.side #tabbar { display:contents; }
+  #addrSlot { display:none; }
+  body.side #addrSlot { display:block; grid-row:2; grid-column:1 / -1; }
+  body.side #resizeTop { position:absolute; left:0; width:264px; }
+  body.side #logo { grid-row:1; grid-column:1; height:42px; padding-left:4px; }
+  body.side #winctl { grid-row:1; grid-column:2; justify-self:end; height:34px; margin:0 -8px 0 0; }
+  body.side #winctl button { width:38px; }
+  body.side #secretBadge { grid-row:2; grid-column:1 / -1; justify-self:start; margin:0 0 6px 4px; }
+  body.side #dragspace { display:none; }
+  /* Adresse sur toute la largeur, boutons sur une ligne en dessous. */
+  body.side #addrwrap { margin:0 0 4px; height:38px; border-radius:12px; background:var(--surface); }
+  body.side #toolbar { grid-row:3; grid-column:1 / -1; height:34px; padding:0; gap:0; justify-content:space-between;
+                       background:transparent; border:0; }
+  body.side #toolbar .btn { width:24px; height:30px; font-size:14px; border-radius:8px; }
+  body.side.secret #secretBadge { grid-row:1; grid-column:1 / -1; justify-self:center; align-self:center; margin:0; }
+  body.side #tabs { grid-row:4; grid-column:1 / -1; flex-direction:column; align-items:stretch; overflow-y:auto;
+                    gap:3px; padding:8px 0; border-top:1px solid var(--border); margin-top:6px; }
+  body.side .tab { flex:none; max-width:none; height:36px; border-radius:10px; border-top:0; padding:0 6px 0 10px; }
+  body.side .tab.active { background:var(--surface); box-shadow: inset 3px 0 0 var(--accent); }
+  body.side .tab.priv.active { box-shadow: inset 3px 0 0 var(--private); }
+  body.side .tab .x { opacity:0; }
+  body.side .tab:hover .x, body.side .tab.active .x { opacity:1; }
+  body.side #btnNew, body.side #btnPriv { grid-row:5; width:auto; height:34px; margin:2px; border-radius:10px;
+                                          background:var(--surface); font-size:16px; }
+  body.side #btnNew::after { content:' Nouvel onglet'; font-size:12px; }
+  body.side #bmbar { grid-row:6; grid-column:1 / -1; height:auto; max-height:30vh; overflow-y:auto; flex-wrap:wrap;
+                     align-content:flex-start; padding:8px 0 0; border:0; border-top:1px solid var(--border);
+                     margin-top:6px; background:transparent; gap:4px; }
+  body.side .bm { max-width:100%; }
+  body.side #panel { border-left:1px solid var(--border); }
   #side { width:220px; padding:18px 10px; border-right:1px solid var(--border); background:var(--surface); flex:none; }
   #side h2 { margin:0 10px 16px; font-size:18px; }
   .nav { display:block; width:100%; text-align:left; padding:10px 12px; border-radius:9px; color:var(--muted); font-size:14px; }
@@ -148,6 +191,7 @@
 </style>
 </head>
 <body>
+ <div id="chrome">
   <div id="tabbar">
     <div id="resizeTop"></div>
     <div id="logo">{{LOGO}}<span>CYBERX</span></div>
@@ -163,6 +207,7 @@
     </div>
   </div>
 
+  <div id="addrSlot"></div>
   <div id="toolbar">
     <button class="btn" id="back" title="Précédent">←</button>
     <button class="btn" id="fwd" title="Suivant">→</button>
@@ -178,9 +223,11 @@
     <button class="btn" id="btnBm" title="Favoris">📑</button>
     <button class="btn" id="btnHist" title="Historique (Ctrl+H)">🕘</button>
     <button class="btn" id="btnSet" title="Thèmes et paramètres">⚙</button>
+    <button class="btn" id="btnLayout" title="Changer de disposition">▥</button>
   </div>
 
   <div id="bmbar"></div>
+ </div>
 
   <div id="panel">
     <div id="side">
@@ -247,6 +294,14 @@
           <div>Moteur de recherche<small>Utilisé dans la barre d'adresse et sur la page Nouvel onglet</small></div>
           <select id="engine"></select>
         </div>
+        <div class="setting">
+          <div>Disposition<small>Classique : onglets en haut. Barre latérale : onglets à gauche, comme Arc.</small></div>
+          <select id="layoutSel"><option value="classic">Classique</option><option value="side">Barre latérale</option></select>
+        </div>
+        <div class="setting">
+          <div>Palette de commandes<small>Ctrl+K partout : onglets, favoris, historique, thèmes et actions.</small></div>
+          <button class="action" id="openPalette">Ouvrir</button>
+        </div>
         <div class="about">
           <b>CyberX <span id="ver"></span></b> — navigateur écrit en Rust.
           <button class="action" id="chkUpd" style="height:28px;margin-left:10px">Rechercher les mises à jour</button><br>
@@ -299,6 +354,13 @@
     document.body.classList.toggle('private', !!S.private);
     document.body.classList.toggle('maximized', !!S.maximized);
     document.body.classList.toggle('secret', !!S.secret);
+    document.body.classList.toggle('side', S.layout === 'side');
+    $('btnLayout').textContent = S.layout === 'side' ? '▤' : '▥';
+    $('layoutSel').value = S.layout;
+    // La barre d'adresse change de place selon la disposition.
+    const aw = $('addrwrap');
+    if (S.layout === 'side' && aw.parentNode !== $('addrSlot')) $('addrSlot').append(aw);
+    if (S.layout !== 'side' && aw.parentNode !== $('toolbar')) $('toolbar').insertBefore(aw, $('shield'));
     $('secretSec').style.display = S.secret ? 'block' : 'none';
     $('wmax').innerHTML = S.maximized ? '&#x2750;' : '&#x25A2;';
     $('wmax').title = S.maximized ? 'Restaurer' : 'Agrandir';
@@ -498,6 +560,9 @@
   $('wmax').onclick = () => send('toggle_maximize');
   $('wclose').onclick = () => send('close_window');
   $('chkUpd').onclick = () => send('check_update');
+  $('btnLayout').onclick = () => send('set_layout', { id: S && S.layout === 'side' ? 'classic' : 'side' });
+  $('layoutSel').onchange = (e) => send('set_layout', { id: e.target.value });
+  $('openPalette').onclick = () => send('palette');
   $('secretBadge').onclick = () => send('exit_secret');
   $('setCode').onclick = () => { const c = $('newCode').value; if (c) { send('secret_change_code', { code: c }); $('newCode').value = ''; } };
   $('pwImport').onclick = () => $('pwFile').click();
@@ -545,7 +610,9 @@
     if (!sugItems.length && !sugShown) return;
     sugShown = sugItems.length > 0;
     const r = $('addrwrap').getBoundingClientRect();
-    send('suggest', { items: sugItems, sel: sugSel, x: r.left + 8, y: r.bottom + 4, w: r.width - 16 });
+    const side = document.body.classList.contains('side');
+    send('suggest', { items: sugItems, sel: sugSel, x: r.left + (side ? 0 : 8), y: r.bottom + 4,
+                      w: side ? Math.max(r.width, 560) : r.width - 16 });
   }
   function hideSuggest() { sugItems = []; sugSel = -1; sendSuggest(); }
   function computeSuggest() {
@@ -586,6 +653,7 @@
     else if (c && k === 'l') cyberx.focusAddress();
     else if (c && k === 'd') send('toggle_bookmark');
     else if (c && k === 'h') openPanel('history');
+    else if (c && k === 'k') send('palette');
     else return;
     e.preventDefault();
   });

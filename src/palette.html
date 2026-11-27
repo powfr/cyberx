@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#0a0e17; --surface:#111827; --surface2:#1a2234; --text:#e6f1ff; --muted:#7d8ba6; --accent:#00e5ff; --accent2:#ff2bd6; --border:#22304a; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; }
+  body { background:var(--surface); color:var(--text); font:14px "Segoe UI", system-ui, sans-serif; user-select:none;
+         border:1px solid var(--border); border-radius:16px; display:flex; flex-direction:column; }
+  .top { display:flex; align-items:center; gap:12px; padding:0 18px; height:58px; border-bottom:1px solid var(--border); flex:none; }
+  .top .ic { font-size:18px; opacity:.7; }
+  #q { flex:1; background:none; border:0; outline:none; color:var(--text); font:inherit; font-size:17px; user-select:text; }
+  #q::placeholder { color:var(--muted); }
+  .esc { font:11px monospace; color:var(--muted); border:1px solid var(--border); border-radius:5px; padding:2px 6px; }
+  #list { flex:1; overflow-y:auto; padding:6px 8px 10px; }
+  .group { margin:10px 10px 4px; font-size:11px; font-weight:700; letter-spacing:.6px; text-transform:uppercase; color:var(--muted); }
+  .item { display:flex; align-items:center; gap:12px; height:40px; padding:0 12px; border-radius:10px; cursor:pointer; }
+  .item.sel { background:var(--surface2); box-shadow: inset 3px 0 0 var(--accent); }
+  .item .ic { width:22px; text-align:center; flex:none; }
+  .item .t { flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .item .u { flex:1 1 0; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--muted); font-size:12px; }
+  .item .k { font:11px monospace; color:var(--muted); flex:none; }
+  .empty { color:var(--muted); padding:20px; text-align:center; }
+</style>
+</head>
+<body>
+  <div class="top"><span class="ic">⌘</span><input id="q" spellcheck="false" placeholder="Rechercher un onglet, un favori, une page, une action…"><span class="esc">Échap</span></div>
+  <div id="list"></div>
+<script>
+  let data = null, flat = [], sel = 0;
+  const q = document.getElementById('q'), list = document.getElementById('list');
+  const send = (o) => window.ipc.postMessage(JSON.stringify(o));
+  const close = () => send({ cmd: 'palette_close' });
+  const run = (it) => { send(it.action); if (!it.keep) close(); };
+
+  const ACTIONS = [
+    { ic: '＋', t: 'Nouvel onglet', k: 'Ctrl+T', action: { cmd: 'new_tab' } },
+    { ic: '🕶', t: 'Nouvel onglet privé', k: 'Ctrl+Maj+N', action: { cmd: 'new_tab', private: true } },
+    { ic: '★', t: 'Ajouter / retirer la page des favoris', k: 'Ctrl+D', action: { cmd: 'toggle_bookmark' } },
+    { ic: '🕘', t: 'Ouvrir l\'historique', k: 'Ctrl+H', action: { cmd: 'open_section', section: 'history' } },
+    { ic: '📑', t: 'Gérer les favoris', action: { cmd: 'open_section', section: 'bookmarks' } },
+    { ic: '⚙', t: 'Paramètres', action: { cmd: 'open_section', section: 'settings' } },
+    { ic: '▥', t: 'Disposition : barre latérale (onglets à gauche)', action: { cmd: 'set_layout', id: 'side' } },
+    { ic: '▤', t: 'Disposition : classique (onglets en haut)', action: { cmd: 'set_layout', id: 'classic' } },
+    { ic: '🛡', t: 'Activer / désactiver le bouclier sur ce site', action: { cmd: 'toggle_site_shield' } },
+    { ic: '⟳', t: 'Actualiser la page', k: 'F5', action: { cmd: 'reload' } },
+    { ic: '⬆', t: 'Rechercher les mises à jour', action: { cmd: 'check_update' } },
+  ];
+
+  // Appelé par CyberX à l'ouverture.
+  window.open_palette = function (d) {
+    data = d;
+    for (const k in d.theme) document.documentElement.style.setProperty(k, d.theme[k]);
+    q.value = ''; sel = 0; render(); q.focus();
+  };
+
+  function matches(text, words) { text = (text || '').toLowerCase(); return words.every((w) => text.includes(w)); }
+
+  function render() {
+    if (!data) return;
+    const raw = q.value.trim(), words = raw.toLowerCase().split(/\s+/).filter(Boolean);
+    const groups = [];
+    const lim = (arr, n) => arr.slice(0, words.length ? n : Math.min(n, 5));
+    const tabs = data.tabs.filter((t) => matches(t.title + ' ' + t.url, words))
+      .map((t) => ({ ic: t.private ? '🕶' : '▭', t: t.title || 'Nouvel onglet', u: t.url, action: { cmd: 'switch_tab', id: t.id } }));
+    if (tabs.length) groups.push(['Onglets ouverts', lim(tabs, 6)]);
+    const acts = ACTIONS.filter((a) => matches(a.t, words));
+    const themes = words.length ? data.themes.filter((t) => matches('thème ' + t.name, words))
+      .map((t) => ({ ic: '🎨', t: 'Thème : ' + t.name, action: { cmd: 'set_theme', id: t.id }, keep: true })) : [];
+    if (acts.length || themes.length) groups.push(['Actions', lim(acts.concat(themes), 8)]);
+    if (words.length) {
+      const bms = data.bookmarks.filter((b) => matches(b.title + ' ' + b.url, words))
+        .map((b) => ({ ic: '★', t: b.title, u: b.url, action: { cmd: 'open_url', url: b.url } }));
+      if (bms.length) groups.push(['Favoris', bms.slice(0, 5)]);
+      const hist = data.history.filter((h) => matches(h.title + ' ' + h.url, words))
+        .map((h) => ({ ic: '🕘', t: h.title, u: h.url, action: { cmd: 'open_url', url: h.url } }));
+      if (hist.length) groups.push(['Historique', hist.slice(0, 6)]);
+      groups.push(['Web', [{ ic: '🔍', t: raw, u: 'Rechercher avec ' + data.engine + ' ou ouvrir l\'adresse', action: { cmd: 'navigate', value: raw } }]]);
+    }
+    flat = [];
+    list.innerHTML = '';
+    groups.forEach(([name, items]) => {
+      const g = document.createElement('div'); g.className = 'group'; g.textContent = name; list.append(g);
+      items.forEach((it) => {
+        const i = flat.length; flat.push(it);
+        const row = document.createElement('div'); row.className = 'item' + (i === sel ? ' sel' : '');
+        const ic = document.createElement('span'); ic.className = 'ic'; ic.textContent = it.ic;
+        const t = document.createElement('span'); t.className = 't'; t.textContent = it.t;
+        const u = document.createElement('span'); u.className = 'u'; u.textContent = it.u || '';
+        row.append(ic, t, u);
+        if (it.k) { const k = document.createElement('span'); k.className = 'k'; k.textContent = it.k; row.append(k); }
+        row.addEventListener('mousemove', () => { if (sel !== i) { sel = i; mark(); } });
+        row.addEventListener('mousedown', (e) => { e.preventDefault(); run(it); });
+        list.append(row);
+      });
+    });
+    if (!flat.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'Aucun résultat'; list.append(e); }
+    if (sel >= flat.length) sel = Math.max(0, flat.length - 1);
+    mark();
+  }
+  function mark() {
+    list.querySelectorAll('.item').forEach((r, i) => r.classList.toggle('sel', i === sel));
+    const r = list.querySelectorAll('.item')[sel]; if (r) r.scrollIntoView({ block: 'nearest' });
+  }
+
+  q.addEventListener('input', () => { sel = 0; render(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k')) { e.preventDefault(); close(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); sel = Math.min(flat.length - 1, sel + 1); mark(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); sel = Math.max(0, sel - 1); mark(); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (flat[sel]) run(flat[sel]); }
+  });
+  window.addEventListener('blur', () => setTimeout(() => { if (!document.hasFocus()) close(); }, 150));
+</script>
+</body>
+</html>
