@@ -299,6 +299,10 @@
           <select id="layoutSel"><option value="classic">Classique</option><option value="side">Barre latérale</option></select>
         </div>
         <div class="setting">
+          <div>Mode compatibilité vidéo<small>Évite l'écran noir (avec le son) sur Netflix et les vidéos protégées. Qualité parfois limitée. Redémarrage nécessaire.</small></div>
+          <div class="switch" id="vcSwitch"></div>
+        </div>
+        <div class="setting">
           <div>Palette de commandes<small>Ctrl+K partout : onglets, favoris, historique, thèmes et actions.</small></div>
           <button class="action" id="openPalette">Ouvrir</button>
         </div>
@@ -357,6 +361,7 @@
     document.body.classList.toggle('side', S.layout === 'side');
     $('btnLayout').textContent = S.layout === 'side' ? '▤' : '▥';
     $('layoutSel').value = S.layout;
+    $('vcSwitch').classList.toggle('on', !!S.videoCompat);
     // La barre d'adresse change de place selon la disposition.
     const aw = $('addrwrap');
     if (S.layout === 'side' && aw.parentNode !== $('addrSlot')) $('addrSlot').append(aw);
@@ -564,6 +569,7 @@
   $('btnLayout').onclick = () => send('set_layout', { id: S && S.layout === 'side' ? 'classic' : 'side' });
   $('layoutSel').onchange = (e) => send('set_layout', { id: e.target.value });
   $('openPalette').onclick = () => send('palette');
+  $('vcSwitch').onclick = () => send('set_video_compat', { on: !(S && S.videoCompat) });
   $('secretBadge').onclick = () => send('exit_secret');
   $('setCode').onclick = () => { const c = $('newCode').value; if (c) { send('secret_change_code', { code: c }); $('newCode').value = ''; } };
   $('pwImport').onclick = () => $('pwFile').click();
@@ -606,7 +612,8 @@
 
   // ---------- Barre d'adresse et suggestions ----------
   const addr = $('addr');
-  let sugItems = [], sugSel = -1, sugShown = false;
+  let sugItems = [], sugSel = -1, sugShown = false, sugData = [];
+  window.cyberx.setSuggest = (list) => { sugData = list; if (document.activeElement === addr && addr.value.trim()) computeSuggest(); };
   function sendSuggest() {
     if (!sugItems.length && !sugShown) return;
     sugShown = sugItems.length > 0;
@@ -621,7 +628,7 @@
     if (!q || !S || document.activeElement !== addr) return hideSuggest();
     const ql = q.toLowerCase();
     const items = [{ kind: 'search', title: q, url: '' }];
-    for (const s of S.suggest) {
+    for (const s of sugData) {
       if (items.length >= 8) break;
       if (s.url.toLowerCase().includes(ql) || (s.title || '').toLowerCase().includes(ql))
         items.push({ kind: s.kind, title: s.title || s.url, url: s.url });
@@ -636,7 +643,7 @@
     hideSuggest(); addr.blur();
   };
   addr.oninput = computeSuggest;
-  addr.onfocus = () => setTimeout(() => addr.select(), 0);
+  addr.onfocus = () => { setTimeout(() => addr.select(), 0); send('need_suggest'); };
   addr.onblur = () => setTimeout(hideSuggest, 200);
   addr.onkeydown = (e) => {
     if (e.key === 'Escape') { hideSuggest(); addr.value = S ? S.url : ''; addr.blur(); }

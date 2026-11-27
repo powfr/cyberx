@@ -121,6 +121,8 @@ enum UserEvent {
     SuggestPick(String),
     /// Recalculer la mise en page (quelques instants après un passage en plein écran).
     Relayout,
+    /// Battement régulier : écritures regroupées et compteur du bouclier.
+    Tick,
     /// Mise à jour installée (chemin de l'exécutable) ou message d'erreur.
     UpdateResult(Result<std::path::PathBuf, String>),
 }
@@ -152,6 +154,11 @@ struct Browser {
     was_maximized: bool,
     /// La fenêtre était agrandie avant le plein écran : on la ré-agrandit en sortant.
     max_before_fullscreen: bool,
+    /// Session (onglets ouverts) à réécrire au prochain battement.
+    session_dirty: bool,
+    /// Compteur du bouclier à rafraîchir au prochain battement.
+    blocked_dirty: bool,
+    ticks: u32,
     should_exit: bool,
     /// Mise à jour disponible : (version, lien).
     update: Option<(String, String)>,
@@ -176,6 +183,21 @@ fn rect(x: f64, y: f64, w: f64, h: f64) -> Rect {
         position: LogicalPosition::new(x, y).into(),
         size: WebLogicalSize::new(w.max(1.0), h.max(1.0)).into(),
     }
+}
+
+/// Options du moteur, identiques pour toutes les vues (WebView2 l'exige).
+static BROWSER_ARGS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Applique les options du moteur à une vue en construction.
+fn engine_options(builder: WebViewBuilder<'_>) -> WebViewBuilder<'_> {
+    #[cfg(windows)]
+    {
+        use wry::WebViewBuilderExtWindows;
+        if let Some(args) = BROWSER_ARGS.get() {
+            return builder.with_additional_browser_args(args.clone());
+        }
+    }
+    builder
 }
 
 fn is_internal(url: &str) -> bool {
@@ -264,6 +286,7 @@ impl Browser {
             Some(ctx) if !private => WebViewBuilder::with_web_context(ctx),
             _ => WebViewBuilder::new(),
         };
+        let builder = engine_options(builder);
         let built = builder
             .with_url(start.clone())
             .with_bounds(rect(0.0, TOP, w, (h - TOP).max(1.0)))
@@ -577,6 +600,7 @@ impl Browser {
 
     fn enter_secret(&mut self, code: String, key: crypto::SecretKey, dir: std::path::PathBuf) {
         self.save_session();
+        self.store.flush();
         self.set_fullscreen(false);
         self.panel_open = false;
         self.hide_suggest();
@@ -591,6 +615,7 @@ impl Browser {
 
     fn exit_secret(&mut self) {
         self.save_session();
+        self.store.flush();
         self.set_fullscreen(false);
         self.panel_open = false;
         self.hide_suggest();
@@ -665,7 +690,7 @@ impl Browser {
         self.hide_suggest();
         if self.palette.is_none() {
             let p = self.proxy.clone();
-            self.palette = WebViewBuilder::new()
+            self.palette = engine_options(WebViewBuilder::new())
                 .with_html(PALETTE_HTML)
                 .with_visible(false)
                 .with_bounds(rect(0.0, 0.0, 10.0, 10.0))
@@ -718,7 +743,7 @@ impl Browser {
         }
         if self.suggest.is_none() {
             let p = self.proxy.clone();
-            self.suggest = WebViewBuilder::new()
+            self.suggest = engine_options(WebViewBuilder::new())
                 .with_html(SUGGEST_HTML)
                 .with_visible(false)
                 .with_bounds(rect(0.0, 0.0, 10.0, 10.0))
@@ -749,6 +774,30 @@ impl Browser {
         shield_win::bring_to_front(s);
     }
 
+    /// Données des suggestions, envoyées seulement quand la barre d'adresse est utilisée.
+    fn send_suggest_data(&self) {
+        // Suggestions pour la barre d'adresse : favoris, puis pages récentes (sans doublon).
+        let mut seen = std::collections::HashSet::new();
+        let mut suggest: Vec<Value> = Vec::new();
+        for b in &self.store.bookmarks {
+            if seen.insert(b.url.as_str()) {
+                suggest.push(json!({ "url": b.url, "title": b.title, "kind": "bm" }));
+            }
+        }
+        for h in self.store.history.iter().rev() {
+            if suggest.len() >= 400 {
+                break;
+            }
+            if seen.insert(h.url.as_str()) {
+                suggest.push(json!({ "url": h.url, "title": h.title, "kind": "hist" }));
+            }
+        }
+
+        let _ = self
+            .ui
+            .evaluate_script(&format!("window.cyberx && cyberx.setSuggest({})", js_json(&Value::Array(suggest))));
+    }
+
     fn pick_suggestion(&mut self, msg: &str) {
         self.hide_suggest();
         let Ok(v) = serde_json::from_str::<Value>(msg) else { return };
@@ -774,9 +823,7 @@ impl Browser {
                 if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab) {
                     t.blocked += 1;
                     if Some(tab) == active_id {
-                        let _ = self
-                            .ui
-                            .evaluate_script(&format!("window.cyberx && cyberx.setBlocked({})", t.blocked));
+                        self.blocked_dirty = true;
                     }
                 }
                 return;
@@ -801,6 +848,7 @@ impl Browser {
                     Ok(exe) => {
                         // Relancer la nouvelle version en gardant les onglets.
                         self.save_session();
+                        self.store.flush();
                         if std::process::Command::new(&exe).spawn().is_ok() {
                             self.should_exit = true;
                             return;
@@ -815,6 +863,25 @@ impl Browser {
             UserEvent::SuggestPick(msg) => self.pick_suggestion(&msg),
             UserEvent::Relayout => {
                 self.layout();
+                return;
+            }
+            UserEvent::Tick => {
+                self.ticks = self.ticks.wrapping_add(1);
+                if self.blocked_dirty {
+                    self.blocked_dirty = false;
+                    if let Some(t) = self.active_tab() {
+                        let _ = self
+                            .ui
+                            .evaluate_script(&format!("window.cyberx && cyberx.setBlocked({})", t.blocked));
+                    }
+                }
+                if self.ticks % 4 == 0 {
+                    if self.session_dirty {
+                        self.session_dirty = false;
+                        self.save_session();
+                    }
+                    self.store.flush();
+                }
                 return;
             }
             UserEvent::Fullscreen(tab, on) => {
@@ -869,7 +936,7 @@ impl Browser {
             }
             UserEvent::NewWindow { url, private } => self.create_tab(Some(url), private),
         }
-        self.save_session();
+        self.session_dirty = true;
         self.push_state();
     }
 
@@ -975,6 +1042,7 @@ impl Browser {
             }
             "clear_history" => self.store.clear_history(),
             "suggest" => self.show_suggest(&v),
+            "need_suggest" => self.send_suggest_data(),
             "palette" => self.toggle_palette(),
             "toggle_fullscreen" => {
                 let on = !self.fullscreen;
@@ -983,6 +1051,11 @@ impl Browser {
             "exit_fullscreen" => self.set_fullscreen(false),
             "palette_close" => self.close_palette(),
             "open_section" => self.open_panel(&str_arg("section")),
+            "set_video_compat" => {
+                self.store.settings.video_compat = v["on"].as_bool().unwrap_or(true);
+                self.store.save_settings();
+                self.update_msg = Some("Mode compatibilité vidéo modifié : redémarre CyberX pour l'appliquer.".into());
+            }
             "set_layout" => {
                 let id = str_arg("id");
                 if id == "side" || id == "classic" {
@@ -1036,6 +1109,7 @@ impl Browser {
             }
             "close_window" => {
                 self.save_session();
+                self.store.flush();
                 self.should_exit = true;
             }
             "remove_allow" => {
@@ -1082,23 +1156,6 @@ impl Browser {
             })
             .collect();
 
-        // Suggestions pour la barre d'adresse : favoris, puis pages récentes (sans doublon).
-        let mut seen = std::collections::HashSet::new();
-        let mut suggest: Vec<Value> = Vec::new();
-        for b in &self.store.bookmarks {
-            if seen.insert(b.url.as_str()) {
-                suggest.push(json!({ "url": b.url, "title": b.title, "kind": "bm" }));
-            }
-        }
-        for h in self.store.history.iter().rev() {
-            if suggest.len() >= 400 {
-                break;
-            }
-            if seen.insert(h.url.as_str()) {
-                suggest.push(json!({ "url": h.url, "title": h.title, "kind": "hist" }));
-            }
-        }
-
         // L'historique complet n'est envoyé que quand le panneau est ouvert.
         let history: Vec<&storage::HistoryEntry> = if self.panel_open {
             self.store.history.iter().rev().take(1500).collect()
@@ -1123,7 +1180,6 @@ impl Browser {
             "bookmarked": self.store.is_bookmarked(&raw_url),
             "bookmarks": self.store.bookmarks,
             "history": history,
-            "suggest": suggest,
             "settings": self.store.settings,
             "theme": themes::vars(&self.store.settings.theme),
             "themes": themes::list(),
@@ -1132,6 +1188,7 @@ impl Browser {
             "secret": self.secret_code.is_some(),
             "maximized": self.window.is_maximized(),
             "layout": self.store.settings.layout,
+            "videoCompat": self.store.settings.video_compat,
             "passwordCount": self.vault.creds.len(),
             "version": updater::VERSION,
             "update": self.update.as_ref().map(|(v, _)| v.clone()),
@@ -1177,7 +1234,15 @@ fn main() {
 
     let size = window.inner_size().to_logical::<f64>(window.scale_factor());
     let p_ui = proxy.clone();
-    let ui = WebViewBuilder::new()
+    // Options du moteur (avant toute vue) : celles de wry par défaut, plus le mode compatibilité vidéo.
+    let mut disabled = String::from("msWebOOUI,msPdfOOUI,msSmartScreenProtection");
+    if Store::load().settings.video_compat {
+        // Décodage matériel des vidéos protégées désactivé : évite l'écran noir (avec le son) sur Netflix.
+        disabled.push_str(",HardwareSecureDecryption,HardwareSecureDecryptionExperiment,msPlayReadyHardwareDrm");
+    }
+    let _ = BROWSER_ARGS.set(format!("--disable-features={disabled}"));
+
+    let ui = engine_options(WebViewBuilder::new())
         .with_html(UI_HTML.replace("{{LOGO}}", LOGO_SVG))
         .with_bounds(rect(0.0, 0.0, size.width, TOP))
         .with_ipc_handler(move |req: Request<String>| {
@@ -1195,6 +1260,9 @@ fn main() {
         fullscreen: false,
         was_maximized: false,
         max_before_fullscreen: false,
+        session_dirty: false,
+        blocked_dirty: false,
+        ticks: 0,
         should_exit: false,
         update: None,
         update_msg: None,
@@ -1222,6 +1290,14 @@ fn main() {
     shield_win::style_window_frame(&browser.window, false);
     shield::spawn_load(browser.store.dir().join("filters"), false, browser.proxy.clone());
     browser.restore_session();
+    // Battement régulier (toutes les 0,5 s) pour les tâches regroupées.
+    let tick_proxy = browser.proxy.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        if tick_proxy.send_event(UserEvent::Tick).is_err() {
+            break;
+        }
+    });
     browser.push_state();
 
     event_loop.run(move |event, _, control_flow| {
@@ -1229,6 +1305,7 @@ fn main() {
         match event {
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 browser.save_session();
+                browser.store.flush();
                 *control_flow = ControlFlow::Exit;
             }
             Event::WindowEvent { event: WindowEvent::Resized(_), .. }
@@ -1245,6 +1322,7 @@ fn main() {
             _ => {}
         }
         if browser.should_exit {
+            browser.store.flush();
             *control_flow = ControlFlow::Exit;
         }
     });

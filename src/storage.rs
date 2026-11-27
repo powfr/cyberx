@@ -35,11 +35,14 @@ pub struct Settings {
     pub allowlist: Vec<String>,
     /// Disposition : "classic" (onglets en haut) ou "side" (barre latérale).
     pub layout: String,
+    /// Mode compatibilité vidéo : décodage des vidéos protégées (Netflix…) sans la carte graphique.
+    /// Évite l'écran noir avec le son. Pris en compte au prochain démarrage.
+    pub video_compat: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "cyber".into(), search: "duckduckgo".into(), adblock: true, allowlist: Vec::new(), layout: "classic".into() }
+        Self { theme: "cyber".into(), search: "duckduckgo".into(), adblock: true, allowlist: Vec::new(), layout: "classic".into(), video_compat: true }
     }
 }
 
@@ -55,6 +58,8 @@ pub struct Store {
     dir: PathBuf,
     /// Espace secret : clé de chiffrement (sinon fichiers JSON ordinaires).
     key: Option<crate::crypto::SecretKey>,
+    /// Historique modifié mais pas encore écrit (écriture regroupée, voir `flush`).
+    history_dirty: bool,
     pub history: Vec<HistoryEntry>,
     pub bookmarks: Vec<Bookmark>,
     pub settings: Settings,
@@ -88,6 +93,7 @@ impl Store {
             bookmarks: read_json(&dir, k, "bookmarks.json"),
             settings: read_json(&dir, k, "settings.json"),
             key,
+            history_dirty: false,
             dir,
         }
     }
@@ -110,7 +116,7 @@ impl Store {
         let name = file_name(self.key.as_ref(), name);
         let path = self.dir.join(&name);
         let tmp = self.dir.join(format!("{name}.tmp"));
-        if let Ok(data) = serde_json::to_vec_pretty(value) {
+        if let Ok(data) = serde_json::to_vec(value) {
             let data = match &self.key {
                 Some(k) => crate::crypto::seal(k, &data),
                 None => data,
@@ -136,7 +142,7 @@ impl Store {
             let extra = self.history.len() - MAX_HISTORY;
             self.history.drain(0..extra);
         }
-        self.write("history.json", &self.history);
+        self.history_dirty = true;
     }
 
     pub fn update_history_title(&mut self, url: &str, title: &str) {
@@ -146,18 +152,29 @@ impl Store {
         if let Some(last) = self.history.iter_mut().rev().take(5).find(|h| h.url == url) {
             if last.title != title {
                 last.title = title.to_string();
-                self.write("history.json", &self.history);
+                self.history_dirty = true;
             }
+        }
+    }
+
+    /// Écrit l'historique s'il a changé. Appelé régulièrement et à la fermeture,
+    /// pour ne pas réécrire le fichier à chaque page visitée (source de saccades).
+    pub fn flush(&mut self) {
+        if self.history_dirty {
+            self.history_dirty = false;
+            self.write("history.json", &self.history);
         }
     }
 
     pub fn delete_history(&mut self, url: &str, ts: u64) {
         self.history.retain(|h| !(h.url == url && h.ts == ts));
+        self.history_dirty = false;
         self.write("history.json", &self.history);
     }
 
     pub fn clear_history(&mut self) {
         self.history.clear();
+        self.history_dirty = false;
         self.write("history.json", &self.history);
     }
 

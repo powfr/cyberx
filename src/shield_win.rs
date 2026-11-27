@@ -109,13 +109,28 @@ unsafe fn attach_inner(
     // --- Bouclier : intercepter toutes les requêtes, y compris celles des iframes
     // (là où se cachent beaucoup de pubs). Ancienne version de WebView2 : page principale seulement.
     let env = core.cast::<ICoreWebView2_2>()?.Environment()?;
-    match core.cast::<ICoreWebView2_22>() {
-        Ok(core22) => core22.AddWebResourceRequestedFilterWithRequestSourceKinds(
-            w!("*"),
-            COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
-            COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
-        )?,
-        Err(_) => core.AddWebResourceRequestedFilter(w!("*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)?,
+    // Seulement les types de requêtes où se trouvent les pubs et traqueurs : chaque requête
+    // interceptée attend la réponse de CyberX, donc on laisse passer directement les pages,
+    // vidéos, polices, etc. (plus fluide).
+    let contexts = [
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_SCRIPT,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_PING,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_STYLESHEET,
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT_OTHER,
+    ];
+    let core22 = core.cast::<ICoreWebView2_22>().ok();
+    for ctx in contexts {
+        match &core22 {
+            Some(c) => c.AddWebResourceRequestedFilterWithRequestSourceKinds(
+                w!("*"),
+                ctx,
+                COREWEBVIEW2_WEB_RESOURCE_REQUEST_SOURCE_KINDS_ALL,
+            )?,
+            None => core.AddWebResourceRequestedFilter(w!("*"), ctx)?,
+        }
     }
 
     let handler = WebResourceRequestedEventHandler::create(Box::new(
@@ -132,6 +147,10 @@ unsafe fn attach_inner(
             let mut uri = PWSTR::null();
             args.Request()?.Uri(&mut uri)?;
             let uri = take_pwstr(uri);
+            // Voie rapide : morceaux de vidéo YouTube / Netflix / Twitch, jamais bloqués.
+            if is_stream(&uri) {
+                return Ok(());
+            }
 
             let mut src = PWSTR::null();
             sender.Source(&mut src)?;
@@ -185,4 +204,12 @@ pub fn style_window_frame(window: &tao::window::Window, fullscreen: bool) {
             std::mem::size_of_val(&corner) as u32,
         );
     }
+}
+
+/// Serveurs de diffusion vidéo : leurs requêtes sont très nombreuses et ne sont jamais des pubs.
+fn is_stream(url: &str) -> bool {
+    let host = url.split("://").nth(1).unwrap_or("").split('/').next().unwrap_or("");
+    ["googlevideo.com", "nflxvideo.net", "ttvnw.net", "akamaized.net"]
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
