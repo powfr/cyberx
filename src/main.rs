@@ -1219,12 +1219,35 @@ fn window_icon() -> Option<tao::window::Icon> {
     None
 }
 
+/// Données du moteur (cookies, connexions, cache) : dans %LOCALAPPDATA%\CyberX\WebView2,
+/// et non plus dans un dossier « cyberx.exe.WebView2 » à côté de l'exécutable.
+/// L'ancien dossier est déplacé automatiquement pour garder les connexions aux sites.
+fn use_engine_data_folder() {
+    let Some(base) = dirs::data_local_dir() else { return };
+    let target = base.join("CyberX").join("WebView2");
+    let mut folder = target.clone();
+    if let Ok(exe) = std::env::current_exe() {
+        let name = exe.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let old = exe.with_file_name(format!("{name}.WebView2"));
+        if old.is_dir() && !target.exists() {
+            let _ = std::fs::create_dir_all(base.join("CyberX"));
+            if std::fs::rename(&old, &target).is_err() {
+                // Déplacement impossible pour l'instant (fichier encore utilisé, autre disque…) :
+                // on garde l'ancien dossier, nouvel essai au prochain démarrage.
+                folder = old;
+            }
+        }
+    }
+    std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", folder);
+}
+
 fn main() {
     // Après une mise à jour, l'ancienne version (et ses processus WebView2) met un instant
     // à se fermer : on attend, sinon le moteur peut refuser de démarrer (écran blanc).
     if std::env::args().any(|a| a == "--after-update") {
         std::thread::sleep(std::time::Duration::from_millis(3000));
     }
+    use_engine_data_folder();
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
