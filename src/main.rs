@@ -938,7 +938,14 @@ impl Browser {
                 let url = str_arg("url");
                 if is_web(&url) {
                     self.panel_open = false;
-                    self.create_tab(Some(url), false);
+                    // Onglet actif encore sur la page « Nouvel onglet » : on l'utilise plutôt que d'en ouvrir un autre.
+                    let on_newtab = self.active_tab().map(|t| is_internal(&t.url)).unwrap_or(false);
+                    if on_newtab {
+                        self.load_in_active(&url);
+                    } else {
+                        let private = self.active_tab().map(|t| t.private).unwrap_or(false);
+                        self.create_tab(Some(url), private);
+                    }
                 }
             }
             "back" => self.eval_active("history.back()"),

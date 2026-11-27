@@ -438,7 +438,8 @@
     S.bookmarks.forEach((b) => {
       const btn = el('button', 'bm');
       btn.append(el('i', null, letter(b.title, b.url)), el('span', null, b.title || host(b.url)));
-      btn.onclick = () => send('open_url', { url: b.url });
+      // Un favori s'ouvre dans un nouvel onglet (sans quitter la page en cours).
+      btn.onclick = () => send('open_url_new_tab', { url: b.url });
       btn.onauxclick = (e) => { if (e.button === 1) send('open_url_new_tab', { url: b.url }); };
       bar.append(btn);
     });
