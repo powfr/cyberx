@@ -36,13 +36,15 @@ pub struct Settings {
     /// Disposition : "classic" (onglets en haut) ou "side" (barre latérale).
     pub layout: String,
     /// Mode compatibilité vidéo : décodage des vidéos protégées (Netflix…) sans la carte graphique.
-    /// Évite l'écran noir avec le son. Pris en compte au prochain démarrage.
+    /// Évite l'écran noir avec le son. Pris en compte au prochain démarrage. Désactivé par défaut.
+    /// (Nouveau nom : l'ancien réglage « video_compat », activé par défaut en 0.7.0, est ignoré.)
+    #[serde(rename = "video_compat_v2")]
     pub video_compat: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { theme: "cyber".into(), search: "duckduckgo".into(), adblock: true, allowlist: Vec::new(), layout: "classic".into(), video_compat: true }
+        Self { theme: "cyber".into(), search: "duckduckgo".into(), adblock: true, allowlist: Vec::new(), layout: "classic".into(), video_compat: false }
     }
 }
 

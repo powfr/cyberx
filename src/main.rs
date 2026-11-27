@@ -849,7 +849,7 @@ impl Browser {
                         // Relancer la nouvelle version en gardant les onglets.
                         self.save_session();
                         self.store.flush();
-                        if std::process::Command::new(&exe).spawn().is_ok() {
+                        if std::process::Command::new(&exe).arg("--after-update").spawn().is_ok() {
                             self.should_exit = true;
                             return;
                         }
@@ -1220,6 +1220,11 @@ fn window_icon() -> Option<tao::window::Icon> {
 }
 
 fn main() {
+    // Après une mise à jour, l'ancienne version (et ses processus WebView2) met un instant
+    // à se fermer : on attend, sinon le moteur peut refuser de démarrer (écran blanc).
+    if std::env::args().any(|a| a == "--after-update") {
+        std::thread::sleep(std::time::Duration::from_millis(3000));
+    }
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
@@ -1233,7 +1238,6 @@ fn main() {
         .expect("Impossible de créer la fenêtre");
 
     let size = window.inner_size().to_logical::<f64>(window.scale_factor());
-    let p_ui = proxy.clone();
     // Options du moteur (avant toute vue) : celles de wry par défaut, plus le mode compatibilité vidéo.
     let mut disabled = String::from("msWebOOUI,msPdfOOUI,msSmartScreenProtection");
     if Store::load().settings.video_compat {
@@ -1242,14 +1246,29 @@ fn main() {
     }
     let _ = BROWSER_ARGS.set(format!("--disable-features={disabled}"));
 
-    let ui = engine_options(WebViewBuilder::new())
+    // Le moteur peut être momentanément indisponible (ancienne instance en train de se fermer) :
+    // on réessaie plusieurs fois avant d'abandonner.
+    let mut attempt = 0;
+    let ui = loop {
+        let p_ui = proxy.clone();
+        let built = engine_options(WebViewBuilder::new())
         .with_html(UI_HTML.replace("{{LOGO}}", LOGO_SVG))
         .with_bounds(rect(0.0, 0.0, size.width, TOP))
         .with_ipc_handler(move |req: Request<String>| {
             let _ = p_ui.send_event(UserEvent::UiIpc(req.body().clone()));
         })
         .build_as_child(&window)
-        .expect("Impossible de créer l'interface (WebView2 est-il installé ?)");
+        ;
+        match built {
+            Ok(ui) => break ui,
+            Err(e) if attempt < 8 => {
+                attempt += 1;
+                eprintln!("Interface non prête ({e}), nouvel essai…");
+                std::thread::sleep(std::time::Duration::from_millis(750));
+            }
+            Err(e) => panic!("Impossible de créer l'interface (WebView2 est-il installé ?) : {e}"),
+        }
+    };
 
     let mut browser = Browser {
         ui,
