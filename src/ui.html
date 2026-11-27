@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>CyberX</title>
+<style>
+  :root {
+    --bg:#0a0e17; --surface:#111827; --surface2:#1a2234; --text:#e6f1ff;
+    --muted:#7d8ba6; --accent:#00e5ff; --accent2:#ff2bd6; --border:#22304a;
+    --private:#a855f7;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 13px "Segoe UI", system-ui, sans-serif;
+    user-select: none; display:flex; flex-direction:column;
+  }
+  button { font:inherit; color:inherit; background:none; border:0; cursor:pointer; }
+
+  /* ---------- Onglets ---------- */
+  #tabbar { height:34px; display:flex; align-items:flex-end; gap:4px; padding:0 0 0 8px; background:var(--bg); position:relative; }
+  #resizeTop { position:absolute; left:0; right:0; top:0; height:4px; cursor:n-resize; z-index:5; }
+  body.maximized #resizeTop { display:none; }
+  body.maximized #tabbar { height:38px; } /* pas de marge de redimensionnement quand la fenêtre est agrandie */
+  #winctl { display:flex; align-self:stretch; margin-left:6px; flex:none; }
+  #winctl button { width:46px; height:100%; font-size:13px; color:var(--text); display:grid; place-items:center; }
+  #winctl button:hover { background:var(--surface2); }
+  #winctl #wclose:hover { background:#e81123; color:#fff; }
+  #dragspace { flex:1 1 40px; align-self:stretch; min-width:40px; }
+  #logo { font-weight:800; letter-spacing:1px; padding:0 10px 9px 2px; white-space:nowrap;
+          background:linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; color:transparent; }
+  #tabs { display:flex; gap:4px; flex:0 1 auto; min-width:0; overflow:hidden; align-items:flex-end; }
+  .tab { flex:1 1 220px; max-width:230px; min-width:56px; height:31px; display:flex; align-items:center; gap:7px;
+         padding:0 6px 0 10px; border-radius:9px 9px 0 0; background:transparent; color:var(--muted);
+         cursor:pointer; position:relative; border-top:2px solid transparent; }
+  .tab:hover { background:var(--surface2); color:var(--text); }
+  .tab.active { background:var(--surface); color:var(--text); border-top-color:var(--accent); }
+  .tab.priv { border-top-color:var(--private); }
+  .tab .ic { width:18px; height:18px; flex:none; border-radius:5px; display:grid; place-items:center;
+             font-size:11px; font-weight:700; background:var(--surface2); color:var(--accent); }
+  .tab.priv .ic { color:var(--private); }
+  .tab .ic.loading { border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%;
+                     color:transparent; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .tab .ti { flex:1; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .tab .x { width:20px; height:20px; border-radius:6px; flex:none; font-size:15px; line-height:1; color:var(--muted); }
+  .tab .x:hover { background:var(--border); color:var(--text); }
+  .newtab { width:30px; height:28px; border-radius:8px; font-size:18px; margin-bottom:2px; color:var(--muted); flex:none; }
+  .newtab:hover { background:var(--surface2); color:var(--text); }
+  .newtab.priv { font-size:14px; }
+
+  /* ---------- Barre d'outils ---------- */
+  #toolbar { height:46px; display:flex; align-items:center; gap:4px; padding:0 8px; background:var(--surface); }
+  .btn { width:34px; height:34px; border-radius:9px; font-size:16px; display:grid; place-items:center; color:var(--text); flex:none; }
+  .btn:hover { background:var(--surface2); }
+  .btn.on { color:var(--accent); }
+  #star.on { color:#fbbf24; }
+  #addrwrap { flex:1; height:34px; display:flex; align-items:center; gap:8px; padding:0 12px; margin:0 6px;
+              background:var(--bg); border:1px solid var(--border); border-radius:17px; }
+  #addrwrap:focus-within { border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  body.private #addrwrap { border-color:var(--private); }
+  #lock { font-size:12px; flex:none; }
+  #addr { flex:1; min-width:0; background:none; border:0; outline:none; color:var(--text); font:inherit; font-size:14px; user-select:text; }
+  #addr::placeholder { color:var(--muted); }
+  #privbadge { display:none; font-size:11px; font-weight:600; color:#fff; background:var(--private); padding:2px 8px; border-radius:10px; flex:none; }
+  body.private #privbadge { display:block; }
+
+  #shield { position:relative; }
+  #shield.off { opacity:.45; filter:grayscale(1); }
+  #shieldCount { position:absolute; right:1px; top:2px; min-width:16px; height:15px; padding:0 4px; border-radius:8px;
+                 background:var(--accent2); color:#fff; font-size:10px; font-weight:700; line-height:15px; display:none; }
+  #shieldCount.on { display:block; }
+  .switch { width:44px; height:24px; border-radius:12px; background:var(--border); position:relative; cursor:pointer; flex:none; }
+  .switch::after { content:''; position:absolute; left:3px; top:3px; width:18px; height:18px; border-radius:50%; background:#fff; transition:left .15s; }
+  .switch.on { background:var(--accent); }
+  .switch.on::after { left:23px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .chip { display:flex; align-items:center; gap:6px; padding:4px 6px 4px 12px; border-radius:14px; background:var(--surface2); }
+  .chip button { width:20px; height:20px; border-radius:10px; color:var(--muted); }
+  .chip button:hover { background:var(--border); color:var(--text); }
+
+  /* ---------- Barre de favoris ---------- */
+  #bmbar { height:30px; display:flex; align-items:center; gap:2px; padding:0 10px; background:var(--surface);
+           border-bottom:1px solid var(--border); overflow:hidden; }
+  .bm { display:flex; align-items:center; gap:6px; max-width:180px; height:24px; padding:0 9px; border-radius:7px; color:var(--text); flex:none; }
+  .bm:hover { background:var(--surface2); }
+  .bm span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .bm i { font-style:normal; font-size:10px; font-weight:700; color:var(--accent); }
+  .bmempty { color:var(--muted); font-size:12px; padding-left:4px; }
+  .toast { display:flex; align-items:center; gap:10px; font-size:12px; color:var(--text); padding-left:4px; }
+  .toast b { color:var(--accent); }
+  .toast button { height:22px; padding:0 10px; border-radius:6px; background:var(--accent); color:var(--bg); font-weight:600; }
+
+  /* ---------- Panneau (historique, favoris, paramètres) ---------- */
+  #panel { flex:1; display:none; min-height:0; background:var(--bg); }
+  #side { width:220px; padding:18px 10px; border-right:1px solid var(--border); background:var(--surface); flex:none; }
+  #side h2 { margin:0 10px 16px; font-size:18px; }
+  .nav { display:block; width:100%; text-align:left; padding:10px 12px; border-radius:9px; color:var(--muted); font-size:14px; }
+  .nav:hover { background:var(--surface2); color:var(--text); }
+  .nav.on { background:var(--surface2); color:var(--accent); }
+  #closepanel { margin-top:18px; color:var(--muted); }
+  #content { flex:1; overflow-y:auto; padding:26px 34px; }
+  .sec { display:none; max-width:900px; }
+  .sec.on { display:block; }
+  .sec h3 { margin:0 0 16px; font-size:22px; }
+  .row { display:flex; align-items:center; gap:12px; padding:9px 12px; border-radius:9px; cursor:pointer; }
+  .row:hover { background:var(--surface); }
+  .row .ic { width:26px; height:26px; border-radius:7px; display:grid; place-items:center; background:var(--surface2);
+             color:var(--accent); font-weight:700; flex:none; }
+  .row .main { flex:1; min-width:0; }
+  .row .t { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .row .u { color:var(--muted); font-size:12px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .row .time { color:var(--muted); font-size:12px; flex:none; width:44px; }
+  .row .del { opacity:0; width:28px; height:28px; border-radius:7px; color:var(--muted); font-size:16px; flex:none; }
+  .row:hover .del { opacity:1; }
+  .row .del:hover { background:var(--border); color:var(--text); }
+  .day { margin:18px 12px 6px; color:var(--muted); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.6px; }
+  .bar { display:flex; gap:10px; margin-bottom:12px; }
+  .input { flex:1; height:36px; padding:0 14px; border-radius:10px; border:1px solid var(--border); background:var(--surface);
+           color:var(--text); font:inherit; outline:none; user-select:text; }
+  .input:focus { border-color:var(--accent); }
+  .action { height:36px; padding:0 16px; border-radius:10px; background:var(--surface2); border:1px solid var(--border); }
+  .action:hover { border-color:var(--accent); }
+  .action.danger { color:#f87171; }
+  .action.danger.confirm { background:#b91c1c; color:#fff; border-color:#b91c1c; }
+  .empty { color:var(--muted); padding:30px 12px; }
+  .themes { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:14px; margin-bottom:30px; }
+  .theme { border:2px solid var(--border); border-radius:14px; padding:12px; cursor:pointer; background:var(--surface); text-align:left; }
+  .theme:hover { border-color:var(--muted); }
+  .theme.on { border-color:var(--accent); }
+  .preview { height:70px; border-radius:9px; margin-bottom:10px; position:relative; overflow:hidden; }
+  .preview .tb { position:absolute; left:0; right:0; top:0; height:18px; }
+  .preview .a1, .preview .a2 { position:absolute; height:8px; border-radius:4px; }
+  .label { font-weight:600; }
+  .setting { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:14px 16px; border-radius:12px;
+             background:var(--surface); margin-bottom:10px; }
+  .setting small { display:block; color:var(--muted); margin-top:3px; }
+  select { height:34px; padding:0 10px; border-radius:9px; background:var(--bg); color:var(--text); border:1px solid var(--border); font:inherit; }
+  .about { color:var(--muted); margin-top:26px; line-height:1.6; }
+  kbd { background:var(--surface2); border:1px solid var(--border); border-radius:5px; padding:1px 6px; font:12px monospace; color:var(--text); }
+</style>
+</head>
+<body>
+  <div id="tabbar">
+    <div id="resizeTop"></div>
+    <div id="logo">CYBERX</div>
+    <div id="tabs"></div>
+    <button class="newtab" id="btnNew" title="Nouvel onglet (Ctrl+T)">+</button>
+    <button class="newtab priv" id="btnPriv" title="Onglet de navigation privée (Ctrl+Maj+N)">🕶</button>
+    <div id="dragspace"></div>
+    <div id="winctl">
+      <button id="wmin" title="Réduire">&#x2014;</button>
+      <button id="wmax" title="Agrandir">&#x25A2;</button>
+      <button id="wclose" title="Fermer">&#x2715;</button>
+    </div>
+  </div>
+
+  <div id="toolbar">
+    <button class="btn" id="back" title="Précédent">←</button>
+    <button class="btn" id="fwd" title="Suivant">→</button>
+    <button class="btn" id="reload" title="Actualiser">⟳</button>
+    <button class="btn" id="home" title="Accueil">⌂</button>
+    <form id="addrwrap" autocomplete="off">
+      <span id="lock">🔍</span>
+      <input id="addr" list="sugg" spellcheck="false" placeholder="Rechercher ou saisir une adresse">
+      <datalist id="sugg"></datalist>
+      <span id="privbadge">Privé</span>
+    </form>
+    <button class="btn" id="shield" title="Bouclier">🛡<span id="shieldCount"></span></button>
+    <button class="btn" id="star" title="Ajouter aux favoris (Ctrl+D)">☆</button>
+    <button class="btn" id="btnBm" title="Favoris">📑</button>
+    <button class="btn" id="btnHist" title="Historique (Ctrl+H)">🕘</button>
+    <button class="btn" id="btnSet" title="Thèmes et paramètres">⚙</button>
+  </div>
+
+  <div id="bmbar"></div>
+
+  <div id="panel">
+    <div id="side">
+      <h2>CyberX</h2>
+      <button class="nav" data-sec="history">🕘&nbsp; Historique</button>
+      <button class="nav" data-sec="bookmarks">📑&nbsp; Favoris</button>
+      <button class="nav" data-sec="settings">🎨&nbsp; Thèmes et paramètres</button>
+      <button class="nav" id="closepanel">✕&nbsp; Fermer (Échap)</button>
+    </div>
+    <div id="content">
+      <div class="sec" id="sec-history">
+        <h3>Historique</h3>
+        <div class="bar">
+          <input class="input" id="hfilter" placeholder="Rechercher dans l'historique" spellcheck="false">
+          <button class="action danger" id="clearHist">Tout effacer</button>
+        </div>
+        <div id="hlist"></div>
+      </div>
+      <div class="sec" id="sec-bookmarks">
+        <h3>Favoris</h3>
+        <div class="bar"><input class="input" id="bfilter" placeholder="Rechercher dans les favoris" spellcheck="false"></div>
+        <div id="blist"></div>
+      </div>
+      <div class="sec" id="sec-settings">
+        <h3>Thème</h3>
+        <div class="themes" id="themes"></div>
+        <h3>Bouclier</h3>
+        <div class="setting">
+          <div>Bloquer les pubs et les traqueurs<small id="shieldInfo">Chargement des listes de filtres…</small></div>
+          <div class="switch" id="adSwitch"></div>
+        </div>
+        <div class="setting">
+          <div>Listes de filtres<small>EasyList, EasyPrivacy et Liste FR — mises à jour automatiquement tous les 4 jours</small></div>
+          <button class="action" id="updFilters">Mettre à jour</button>
+        </div>
+        <div class="setting" style="display:block">
+          <div>Sites où le bouclier est désactivé<small>Cliquez sur 🛡 sur un site pour l'ajouter ou le retirer</small></div>
+          <div class="chips" id="allowlist"></div>
+        </div>
+        <h3 style="margin-top:28px">Paramètres</h3>
+        <div class="setting">
+          <div>Moteur de recherche<small>Utilisé dans la barre d'adresse et sur la page Nouvel onglet</small></div>
+          <select id="engine"></select>
+        </div>
+        <div class="about">
+          <b>CyberX <span id="ver"></span></b> — navigateur écrit en Rust.
+          <button class="action" id="chkUpd" style="height:28px;margin-left:10px">Rechercher les mises à jour</button><br>
+          Les onglets 🕶 privés n'enregistrent ni historique, ni cookies après fermeture.<br>
+          Raccourcis : <kbd>Ctrl+T</kbd> nouvel onglet · <kbd>Ctrl+Maj+N</kbd> onglet privé · <kbd>Ctrl+W</kbd> fermer ·
+          <kbd>Ctrl+L</kbd> barre d'adresse · <kbd>Ctrl+D</kbd> favori · <kbd>Ctrl+H</kbd> historique · <kbd>Ctrl+Tab</kbd> onglet suivant
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  let S = null, section = 'history';
+  const $ = (id) => document.getElementById(id);
+  const send = (cmd, extra) => window.ipc.postMessage(JSON.stringify(Object.assign({ cmd }, extra || {})));
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u || ''; } };
+  const letter = (t, u) => ((host(u) || t || '?').charAt(0) || '?').toUpperCase();
+  const activeTab = () => S && S.tabs.find((t) => t.id === S.active);
+
+  window.cyberx = {
+    update(s) { S = s; render(); },
+    focusAddress() { const a = $('addr'); a.focus(); a.select(); },
+    openSection(name) { section = name; render(); },
+    setBlocked(n) { if (S) { S.blocked = n; renderShield(); } },
+  };
+
+  function renderShield() {
+    const b = $('shield'), c = $('shieldCount');
+    const off = !S.adblock || S.siteAllowed || !S.host;
+    b.classList.toggle('off', off);
+    c.textContent = S.blocked > 99 ? '99+' : S.blocked;
+    c.classList.toggle('on', !off && S.blocked > 0);
+    if (!S.adblock) b.title = 'Bouclier désactivé (Paramètres)';
+    else if (!S.host) b.title = 'Bouclier';
+    else if (S.siteAllowed) b.title = 'Bouclier désactivé sur ' + S.host + ' — cliquer pour le réactiver';
+    else b.title = S.blocked + ' pub(s) et traqueur(s) bloqué(s) sur cette page\nCliquer pour désactiver le bouclier sur ' + S.host;
+  }
+
+  function openPanel(sec) {
+    if (S && S.panelOpen && section === sec) { send('panel', { open: false }); return; }
+    section = sec; send('panel', { open: true });
+  }
+
+  // ---------- Rendu ----------
+  function render() {
+    if (!S) return;
+    for (const k in S.theme) document.documentElement.style.setProperty(k, S.theme[k]);
+    document.body.classList.toggle('private', !!S.private);
+    document.body.classList.toggle('maximized', !!S.maximized);
+    $('wmax').innerHTML = S.maximized ? '&#x2750;' : '&#x25A2;';
+    $('wmax').title = S.maximized ? 'Restaurer' : 'Agrandir';
+    renderTabs();
+
+    const a = $('addr');
+    if (document.activeElement !== a) a.value = S.url || '';
+    $('lock').textContent = S.private ? '🕶' : S.url.startsWith('https://') ? '🔒' : S.url ? '⚠️' : '🔍';
+    $('lock').title = S.url.startsWith('https://') ? 'Connexion sécurisée' : S.url ? 'Connexion non sécurisée' : '';
+    $('star').classList.toggle('on', !!S.bookmarked);
+    $('star').textContent = S.bookmarked ? '★' : '☆';
+    $('reload').textContent = S.loading ? '✕' : '⟳';
+    $('reload').title = S.loading ? 'Arrêter' : 'Actualiser';
+
+    renderShield();
+    renderBookmarkBar();
+    const dl = $('sugg'); dl.innerHTML = '';
+    S.suggest.forEach((u) => { const o = document.createElement('option'); o.value = u; dl.append(o); });
+
+    $('panel').style.display = S.panelOpen ? 'flex' : 'none';
+    $('btnHist').classList.toggle('on', S.panelOpen && section === 'history');
+    $('btnBm').classList.toggle('on', S.panelOpen && section === 'bookmarks');
+    $('btnSet').classList.toggle('on', S.panelOpen && section === 'settings');
+    if (S.panelOpen) renderPanel();
+  }
+
+  function renderTabs() {
+    const box = $('tabs'); box.innerHTML = '';
+    S.tabs.forEach((t) => {
+      const d = el('div', 'tab' + (t.id === S.active ? ' active' : '') + (t.private ? ' priv' : ''));
+      d.title = t.title + (t.url ? '\n' + t.url : '');
+      const ic = el('span', 'ic' + (t.loading ? ' loading' : ''), t.private ? '🕶' : letter(t.title, t.url));
+      const ti = el('span', 'ti', t.title || t.url || 'Nouvel onglet');
+      const x = el('button', 'x', '×'); x.title = 'Fermer (Ctrl+W)';
+      x.onclick = (e) => { e.stopPropagation(); send('close_tab', { id: t.id }); };
+      d.append(ic, ti, x);
+      d.onclick = () => send('switch_tab', { id: t.id });
+      d.onauxclick = (e) => { if (e.button === 1) send('close_tab', { id: t.id }); };
+      box.append(d);
+    });
+  }
+
+  let toast = null, toastTimer = null;
+  function showToast(t) {
+    toast = t; clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast = null; if (S) renderBookmarkBar(); }, 6000);
+    renderBookmarkBar();
+  }
+
+  function renderBookmarkBar() {
+    const bar = $('bmbar'); bar.innerHTML = '';
+    if (toast) {
+      const t = el('div', 'toast');
+      const msg = el('span');
+      msg.append('🛡 Bouclier ', el('b', null, toast.on ? 'activé' : 'désactivé'), ' sur ' + toast.host + '. ');
+      const btn = el('button', null, 'Recharger la page');
+      btn.onclick = () => { send('reload'); toast = null; renderBookmarkBar(); };
+      t.append(msg, btn);
+      bar.append(t);
+      return;
+    }
+    if (S.update || S.updateMsg) {
+      const t = el('div', 'toast');
+      if (S.updateMsg) t.append(el('span', null, S.updateMsg));
+      else t.append(el('span', null, '⬆ CyberX '), el('b', null, S.update), el('span', null, ' est disponible.'));
+      if (S.update && !S.updateMsg) {
+        const go = el('button', null, 'Mettre à jour et redémarrer');
+        go.onclick = () => send('install_update');
+        t.append(go);
+      }
+      const later = el('button', null, S.update && !S.updateMsg ? 'Plus tard' : 'OK');
+      later.style.background = 'var(--surface2)'; later.style.color = 'var(--text)';
+      later.onclick = () => send('dismiss_update');
+      t.append(later);
+      bar.append(t);
+      return;
+    }
+    if (!S.bookmarks.length) { bar.append(el('span', 'bmempty', 'Cliquez sur ☆ pour ajouter une page à vos favoris')); return; }
+    S.bookmarks.forEach((b) => {
+      const btn = el('button', 'bm'); btn.title = b.title + '\n' + b.url;
+      btn.append(el('i', null, letter(b.title, b.url)), el('span', null, b.title || host(b.url)));
+      btn.onclick = () => send('open_url', { url: b.url });
+      btn.onauxclick = (e) => { if (e.button === 1) send('open_url_new_tab', { url: b.url }); };
+      bar.append(btn);
+    });
+  }
+
+  function renderPanel() {
+    document.querySelectorAll('.nav[data-sec]').forEach((n) => n.classList.toggle('on', n.dataset.sec === section));
+    document.querySelectorAll('.sec').forEach((s) => s.classList.toggle('on', s.id === 'sec-' + section));
+    if (section === 'history') renderHistory();
+    if (section === 'bookmarks') renderBookmarks();
+    if (section === 'settings') renderSettings();
+  }
+
+  function row(item, timeText, onDelete) {
+    const r = el('div', 'row');
+    if (timeText != null) r.append(el('span', 'time', timeText));
+    r.append(el('span', 'ic', letter(item.title, item.url)));
+    const m = el('div', 'main');
+    m.append(el('div', 't', item.title || item.url), el('div', 'u', item.url));
+    r.append(m);
+    const del = el('button', 'del', '×'); del.title = 'Supprimer';
+    del.onclick = (e) => { e.stopPropagation(); onDelete(); };
+    r.append(del);
+    r.onclick = () => send('open_url', { url: item.url });
+    r.onauxclick = (e) => { if (e.button === 1) send('open_url_new_tab', { url: item.url }); };
+    return r;
+  }
+
+  function dayLabel(d) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const x = new Date(d); x.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - x) / 86400000);
+    if (diff === 0) return "Aujourd'hui";
+    if (diff === 1) return 'Hier';
+    return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+  }
+
+  function renderHistory() {
+    const list = $('hlist'); list.innerHTML = '';
+    const q = $('hfilter').value.trim().toLowerCase();
+    const items = S.history.filter((h) => !q || h.title.toLowerCase().includes(q) || h.url.toLowerCase().includes(q));
+    if (!items.length) { list.append(el('div', 'empty', q ? 'Aucun résultat.' : "L'historique est vide.")); return; }
+    let last = '';
+    items.forEach((h) => {
+      const d = new Date(h.ts * 1000), label = dayLabel(d);
+      if (label !== last) { list.append(el('div', 'day', label)); last = label; }
+      const time = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+      list.append(row(h, time, () => send('delete_history', { url: h.url, ts: h.ts })));
+    });
+  }
+
+  function renderBookmarks() {
+    const list = $('blist'); list.innerHTML = '';
+    const q = $('bfilter').value.trim().toLowerCase();
+    const items = S.bookmarks.filter((b) => !q || b.title.toLowerCase().includes(q) || b.url.toLowerCase().includes(q));
+    if (!items.length) { list.append(el('div', 'empty', q ? 'Aucun résultat.' : "Aucun favori pour l'instant. Cliquez sur ☆ dans la barre d'adresse.")); return; }
+    items.forEach((b) => list.append(row(b, null, () => send('remove_bookmark', { url: b.url }))));
+  }
+
+  function renderSettings() {
+    const box = $('themes'); box.innerHTML = '';
+    S.themes.forEach((t) => {
+      const [bg, surface, , text, , accent, accent2] = t.colors;
+      const card = el('button', 'theme' + (t.id === S.settings.theme ? ' on' : ''));
+      const p = el('div', 'preview'); p.style.background = bg;
+      const tb = el('div', 'tb'); tb.style.background = surface;
+      const a1 = el('div', 'a1'); a1.style.cssText = `background:${accent};left:12px;top:32px;width:60%`;
+      const a2 = el('div', 'a2'); a2.style.cssText = `background:${accent2};left:12px;top:48px;width:35%`;
+      p.append(tb, a1, a2);
+      const lbl = el('div', 'label', t.name); lbl.style.color = 'var(--text)';
+      card.append(p, lbl);
+      card.onclick = () => send('set_theme', { id: t.id });
+      box.append(card);
+    });
+    const sel = $('engine');
+    if (sel.options.length !== S.engines.length) {
+      sel.innerHTML = '';
+      S.engines.forEach((e) => { const o = document.createElement('option'); o.value = e.id; o.textContent = e.name; sel.append(o); });
+    }
+    sel.value = S.settings.search;
+    $('ver').textContent = S.version;
+
+    $('adSwitch').classList.toggle('on', !!S.adblock);
+    $('shieldInfo').textContent = S.filtersReady
+      ? S.filterRules.toLocaleString('fr-FR') + ' règles de filtrage chargées'
+      : 'Chargement des listes de filtres…';
+    const al = $('allowlist'); al.innerHTML = '';
+    if (!S.settings.allowlist.length) al.append(el('span', 'bmempty', 'Aucun'));
+    S.settings.allowlist.forEach((h) => {
+      const chip = el('span', 'chip'); chip.append(el('span', null, h));
+      const x = el('button', null, '×'); x.title = 'Réactiver le bouclier sur ce site';
+      x.onclick = () => send('remove_allow', { host: h });
+      chip.append(x); al.append(chip);
+    });
+  }
+
+  // ---------- Actions ----------
+  $('btnNew').onclick = () => send('new_tab');
+  $('btnPriv').onclick = () => send('new_tab', { private: true });
+  $('back').onclick = () => send('back');
+  $('fwd').onclick = () => send('forward');
+  $('reload').onclick = () => send(S && S.loading ? 'stop' : 'reload');
+  $('home').onclick = () => send('home');
+  $('star').onclick = () => send('toggle_bookmark');
+  $('shield').onclick = () => {
+    if (S && S.adblock && S.host) {
+      showToast({ host: S.host, on: S.siteAllowed }); // l'état va s'inverser
+      send('toggle_site_shield');
+    } else openPanel('settings');
+  };
+  // Fenêtre : déplacer (glisser la barre), double-clic = agrandir, boutons ─ ▢ ✕
+  $('tabbar').addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || e.target.closest('.tab, button, #resizeTop')) return;
+    if (e.detail === 2) send('toggle_maximize'); else send('drag');
+  });
+  $('resizeTop').addEventListener('mousedown', (e) => { if (e.button === 0) send('resize_top'); });
+  $('wmin').onclick = () => send('minimize');
+  $('wmax').onclick = () => send('toggle_maximize');
+  $('wclose').onclick = () => send('close_window');
+  $('chkUpd').onclick = () => send('check_update');
+  $('adSwitch').onclick = () => send('set_adblock', { on: !(S && S.adblock) });
+  $('updFilters').onclick = (e) => { send('update_filters'); e.currentTarget.textContent = 'Mise à jour lancée…'; };
+  $('btnHist').onclick = () => openPanel('history');
+  $('btnBm').onclick = () => openPanel('bookmarks');
+  $('btnSet').onclick = () => openPanel('settings');
+  $('closepanel').onclick = () => send('panel', { open: false });
+  document.querySelectorAll('.nav[data-sec]').forEach((n) => (n.onclick = () => { section = n.dataset.sec; render(); }));
+  $('hfilter').oninput = renderHistory;
+  $('bfilter').oninput = renderBookmarks;
+  $('engine').onchange = (e) => send('set_search', { id: e.target.value });
+
+  let clearTimer = null;
+  $('clearHist').onclick = (e) => {
+    const b = e.currentTarget;
+    if (b.classList.contains('confirm')) {
+      send('clear_history'); b.classList.remove('confirm'); b.textContent = 'Tout effacer'; clearTimeout(clearTimer);
+    } else {
+      b.classList.add('confirm'); b.textContent = 'Confirmer ?';
+      clearTimer = setTimeout(() => { b.classList.remove('confirm'); b.textContent = 'Tout effacer'; }, 3000);
+    }
+  };
+
+  const addr = $('addr');
+  $('addrwrap').onsubmit = (e) => { e.preventDefault(); send('navigate', { value: addr.value }); addr.blur(); };
+  addr.onfocus = () => setTimeout(() => addr.select(), 0);
+  addr.onkeydown = (e) => { if (e.key === 'Escape') { addr.value = S ? S.url : ''; addr.blur(); } };
+
+  document.addEventListener('keydown', (e) => {
+    const k = (e.key || '').toLowerCase(), c = e.ctrlKey || e.metaKey;
+    if (k === 'escape' && S && S.panelOpen && document.activeElement !== addr) send('panel', { open: false });
+    else if (c && e.shiftKey && k === 'n') send('new_tab', { private: true });
+    else if (c && k === 't') send('new_tab');
+    else if (c && k === 'w') { if (S && S.active != null) send('close_tab', { id: S.active }); }
+    else if (c && k === 'l') cyberx.focusAddress();
+    else if (c && k === 'd') send('toggle_bookmark');
+    else if (c && k === 'h') openPanel('history');
+    else return;
+    e.preventDefault();
+  });
+
+  send('ready');
+})();
+</script>
+</body>
+</html>

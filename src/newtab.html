@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Nouvel onglet</title>
+<style>
+  {{THEME_CSS}}
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 15% -10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+      radial-gradient(900px 500px at 110% 110%, color-mix(in srgb, var(--accent2) 14%, transparent), transparent 60%),
+      var(--bg);
+    color: var(--text); font: 15px "Segoe UI", system-ui, sans-serif;
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap:34px; padding:40px;
+  }
+  body.private {
+    background: radial-gradient(1000px 600px at 50% -10%, rgba(168,85,247,.25), transparent 60%), var(--bg);
+  }
+  h1 {
+    margin:0; font-size:64px; font-weight:900; letter-spacing:6px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    -webkit-background-clip:text; color:transparent;
+    filter: drop-shadow(0 0 24px color-mix(in srgb, var(--accent) 35%, transparent));
+  }
+  body.private h1 { background: linear-gradient(90deg, #a855f7, #ec4899); -webkit-background-clip:text; }
+  form { width:min(640px, 100%); }
+  input {
+    width:100%; height:54px; padding:0 24px; border-radius:27px; font:inherit; font-size:17px;
+    background:var(--surface); color:var(--text); border:1px solid var(--border); outline:none;
+  }
+  input:focus { border-color:var(--accent); box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); }
+  input::placeholder { color:var(--muted); }
+  .tiles { display:grid; grid-template-columns:repeat(4, 110px); gap:16px; }
+  .tile { display:flex; flex-direction:column; align-items:center; gap:8px; padding:14px 8px; border-radius:14px;
+          text-decoration:none; color:var(--text); }
+  .tile:hover { background:var(--surface); }
+  .tile .ic { width:46px; height:46px; border-radius:13px; display:grid; place-items:center; font-weight:800; font-size:19px;
+              background:var(--surface2); color:var(--accent); border:1px solid var(--border); }
+  .tile span { font-size:12px; max-width:100%; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .priv { display:none; max-width:560px; text-align:center; color:var(--muted); line-height:1.6;
+          padding:18px 24px; border-radius:14px; background:var(--surface); border:1px solid rgba(168,85,247,.4); }
+  .priv b { color:#c084fc; }
+  body.private .priv { display:block; }
+</style>
+</head>
+<body>
+  <h1>CYBERX</h1>
+  <form id="f" autocomplete="off">
+    <input id="q" autofocus spellcheck="false">
+  </form>
+  <div class="priv">
+    <b>🕶 Navigation privée</b><br>
+    CyberX n'enregistre pas l'historique de cet onglet, et ses cookies et données de site sont effacés quand vous fermez vos onglets privés.
+    Les sites que vous visitez et votre fournisseur d'accès peuvent toujours voir votre activité.
+  </div>
+  <div class="tiles" id="tiles"></div>
+<script>
+  const PREFIX = {{SEARCH_PREFIX}};
+  const ENGINE = {{ENGINE_NAME}};
+  const TILES = {{TILES}};
+  const PRIVATE = {{PRIVATE}};
+  if (PRIVATE) document.body.classList.add('private');
+
+  const q = document.getElementById('q');
+  q.placeholder = 'Rechercher avec ' + ENGINE + ' ou saisir une adresse';
+  q.focus();
+
+  document.getElementById('f').onsubmit = (e) => {
+    e.preventDefault();
+    const v = q.value.trim();
+    if (!v) return;
+    let url;
+    if (/^https?:\/\//i.test(v)) url = v;
+    else if (!/\s/.test(v) && (/^localhost/i.test(v) || /^[^.].*\.[^.]+$/.test(v))) url = 'https://' + v;
+    else url = PREFIX + encodeURIComponent(v);
+    location.href = url;
+  };
+
+  const box = document.getElementById('tiles');
+  const host = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch (e) { return u; } };
+  TILES.forEach((t) => {
+    const a = document.createElement('a');
+    a.className = 'tile'; a.href = t.url; a.title = t.title;
+    const ic = document.createElement('div'); ic.className = 'ic';
+    ic.textContent = (host(t.url).charAt(0) || '?').toUpperCase();
+    const s = document.createElement('span'); s.textContent = t.title || host(t.url);
+    a.append(ic, s); box.append(a);
+  });
+</script>
+</body>
+</html>

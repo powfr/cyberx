@@ -1,0 +1,29 @@
+[package]
+name = "cyberx"
+version = "0.3.0"
+edition = "2021"
+description = "CyberX - un navigateur web léger écrit en Rust"
+
+[dependencies]
+wry = "0.47"
+tao = "0.30"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+# Moteur de blocage de Brave (open source) + téléchargement des listes de filtres
+adblock = "0.9"
+ureq = "2"
+# rmp 0.8.15+ casse rmp-serde 0.15 (utilisé par adblock) : on garde la dernière version compatible
+rmp = "=0.8.14"
+
+# Accès direct à WebView2 pour intercepter les requêtes (même versions que wry 0.47)
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.33"
+windows = { version = "0.58", features = ["Win32_Foundation", "Win32_System_Com"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
