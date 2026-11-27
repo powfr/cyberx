@@ -36,6 +36,9 @@ const BORDER: f64 = 4.0;
 
 const UI_HTML: &str = include_str!("ui.html");
 const NEWTAB_HTML: &str = include_str!("newtab.html");
+const LOGO_SVG: &str = include_str!("../assets/logo.svg");
+/// Icône de la fenêtre : 128×128 pixels RGBA.
+const ICON_RGBA: &[u8] = include_bytes!("../assets/icon-128.rgba");
 
 /// Script injecté dans les pages web : raccourcis clavier quand une page a le focus.
 const SHORTCUTS_JS: &str = r#"
@@ -213,6 +216,7 @@ impl Browser {
             .map(|b| json!({ "url": b.url, "title": b.title }))
             .collect();
         let html = NEWTAB_HTML
+            .replace("{{LOGO}}", LOGO_SVG)
             .replace("{{THEME_CSS}}", &themes::css(&self.store.settings.theme))
             .replace("{{SEARCH_PREFIX}}", &js_json(&json!(engine.prefix)))
             .replace("{{ENGINE_NAME}}", &js_json(&json!(engine.name)))
@@ -784,6 +788,7 @@ fn main() {
 
     let window = WindowBuilder::new()
         .with_title("CyberX")
+        .with_window_icon(tao::window::Icon::from_rgba(ICON_RGBA.to_vec(), 128, 128).ok())
         .with_decorations(false)
         .with_inner_size(LogicalSize::new(1280.0, 820.0))
         .with_min_inner_size(LogicalSize::new(640.0, 400.0))
@@ -793,7 +798,7 @@ fn main() {
     let size = window.inner_size().to_logical::<f64>(window.scale_factor());
     let p_ui = proxy.clone();
     let ui = WebViewBuilder::new()
-        .with_html(UI_HTML)
+        .with_html(UI_HTML.replace("{{LOGO}}", LOGO_SVG))
         .with_bounds(rect(0.0, 0.0, size.width, TOP))
         .with_ipc_handler(move |req: Request<String>| {
             let _ = p_ui.send_event(UserEvent::UiIpc(req.body().clone()));
