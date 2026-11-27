@@ -8,7 +8,9 @@
 mod shield;
 #[cfg(windows)]
 mod shield_win;
+mod crypto;
 mod passwords;
+mod secret;
 mod storage;
 mod themes;
 mod updater;
@@ -26,7 +28,7 @@ use tao::{
 use wry::{
     dpi::{LogicalPosition, LogicalSize as WebLogicalSize},
     http::Request,
-    PageLoadEvent, Rect, WebView, WebViewBuilder,
+    PageLoadEvent, Rect, WebContext, WebView, WebViewBuilder,
 };
 
 /// Hauteur de la barre du haut : onglets (38) + barre d'outils (46) + barre de favoris (30).
@@ -125,6 +127,12 @@ struct Browser {
     // Les webviews sont déclarées avant la fenêtre pour être détruites avant elle.
     ui: WebView,
     tabs: Vec<Tab>,
+    /// Espace secret ouvert : données des sites séparées (déclaré après `tabs` pour être libéré après eux).
+    secret_ctx: Option<WebContext>,
+    /// Code de l'espace secret ouvert (le retaper le referme).
+    secret_code: Option<String>,
+    /// Données normales mises de côté pendant que l'espace secret est ouvert.
+    parked: Option<(Store, passwords::Vault)>,
     active: usize,
     next_id: u32,
     panel_open: bool,
@@ -242,7 +250,12 @@ impl Browser {
         let p_title = self.proxy.clone();
         let p_new = self.proxy.clone();
 
-        let built = WebViewBuilder::new()
+        // Onglet de l'espace secret : cookies et connexions séparés de l'espace normal.
+        let builder = match self.secret_ctx.as_mut() {
+            Some(ctx) if !private => WebViewBuilder::with_web_context(ctx),
+            _ => WebViewBuilder::new(),
+        };
+        let built = builder
             .with_url(start.clone())
             .with_bounds(rect(0.0, TOP, w, h - TOP))
             .with_visible(false)
@@ -480,6 +493,83 @@ impl Browser {
         self.refresh_shield_flags();
     }
 
+    // ---------------- Espace secret ----------------
+
+    /// Si `input` est le code secret : ouvre ou ferme l'espace secret. Rien n'est enregistré.
+    fn try_secret(&mut self, input: &str) -> bool {
+        let code = input.trim();
+        if let Some(current) = self.secret_code.clone() {
+            if code == current {
+                self.exit_secret();
+                return true;
+            }
+            return false;
+        }
+        let base = self.store.dir();
+        match secret::unlock(&base, code) {
+            Some(key) => {
+                self.enter_secret(code.to_string(), key, secret::dir(&base));
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn enter_secret(&mut self, code: String, key: crypto::SecretKey, dir: std::path::PathBuf) {
+        self.save_session();
+        self.set_fullscreen(false);
+        self.panel_open = false;
+        self.hide_suggest();
+        self.tabs.clear();
+        let store = std::mem::replace(&mut self.store, Store::load_secret(dir.clone(), key));
+        let vault = std::mem::replace(&mut self.vault, passwords::Vault::load_secret(&dir, key));
+        self.parked = Some((store, vault));
+        self.secret_ctx = Some(WebContext::new(Some(dir.join("web"))));
+        self.secret_code = Some(code);
+        self.after_profile_switch();
+    }
+
+    fn exit_secret(&mut self) {
+        self.save_session();
+        self.set_fullscreen(false);
+        self.panel_open = false;
+        self.hide_suggest();
+        self.tabs.clear();
+        if let Some((store, vault)) = self.parked.take() {
+            self.store = store;
+            self.vault = vault;
+        }
+        self.secret_ctx = None;
+        self.secret_code = None;
+        self.update_msg = None;
+        self.after_profile_switch();
+    }
+
+    fn after_profile_switch(&mut self) {
+        {
+            let mut ad = self.ad.borrow_mut();
+            ad.enabled = self.store.settings.adblock;
+            ad.allow = self.store.settings.allowlist.iter().cloned().collect();
+        }
+        self.apply_window_background();
+        self.restore_session();
+    }
+
+    fn change_secret_code(&mut self, code: &str) {
+        if self.secret_code.is_none() {
+            return;
+        }
+        if !secret::valid_code(code) {
+            self.update_msg = Some("Code refusé : au moins 4 caractères, sans espace.".into());
+            return;
+        }
+        let key = secret::set_code(&self.store.dir(), code);
+        self.store.rekey(key);
+        self.vault.rekey(key);
+        self.secret_code = Some(code.to_string());
+        self.update_msg = Some("✓ Nouveau code secret enregistré. Retiens-le bien : sans lui, cet espace est illisible.".into());
+    }
+
     // ---------------- Suggestions de la barre d'adresse ----------------
 
     fn hide_suggest(&self) {
@@ -661,6 +751,16 @@ impl Browser {
             "history" => self.open_panel("history"),
             "next_tab" => self.cycle_tab(true),
             "prev_tab" => self.cycle_tab(false),
+            // Recherche depuis la page « Nouvel onglet » (seulement depuis cette page).
+            s if s.starts_with("nav:") => {
+                let from_newtab = self.active_tab().map(|t| t.url.starts_with("data:")).unwrap_or(false);
+                let value = &s[4..];
+                if from_newtab && !self.try_secret(value) {
+                    let private = self.active_tab().map(|t| t.private).unwrap_or(false);
+                    let url = self.resolve_input(value, private);
+                    self.load_in_active(&url);
+                }
+            }
             _ => {}
         }
     }
@@ -673,10 +773,19 @@ impl Browser {
         match v["cmd"].as_str().unwrap_or("") {
             "ready" => {}
             "navigate" => {
-                let private = self.active_tab().map(|t| t.private).unwrap_or(false);
-                let url = self.resolve_input(&str_arg("value"), private);
-                self.load_in_active(&url);
+                let value = str_arg("value");
+                if !self.try_secret(&value) {
+                    let private = self.active_tab().map(|t| t.private).unwrap_or(false);
+                    let url = self.resolve_input(&value, private);
+                    self.load_in_active(&url);
+                }
             }
+            "exit_secret" => {
+                if self.secret_code.is_some() {
+                    self.exit_secret();
+                }
+            }
+            "secret_change_code" => self.change_secret_code(&str_arg("code")),
             "open_url" => {
                 let url = str_arg("url");
                 if is_web(&url) {
@@ -855,6 +964,7 @@ impl Browser {
             "themes": themes::list(),
             "engines": themes::engines_list(),
             "panelOpen": self.panel_open,
+            "secret": self.secret_code.is_some(),
             "maximized": self.window.is_maximized(),
             "passwordCount": self.vault.creds.len(),
             "version": updater::VERSION,
@@ -923,6 +1033,9 @@ fn main() {
         update_msg: None,
         suggest: None,
         vault: passwords::Vault::load(&Store::load().dir()),
+        secret_ctx: None,
+        secret_code: None,
+        parked: None,
         ad: Rc::new(RefCell::new(AdState::new(true, &[]))),
         store: Store::load(),
         proxy,

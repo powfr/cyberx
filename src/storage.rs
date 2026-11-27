@@ -51,6 +51,8 @@ pub struct Session {
 
 pub struct Store {
     dir: PathBuf,
+    /// Espace secret : clé de chiffrement (sinon fichiers JSON ordinaires).
+    key: Option<crate::crypto::SecretKey>,
     pub history: Vec<HistoryEntry>,
     pub bookmarks: Vec<Bookmark>,
     pub settings: Settings,
@@ -68,13 +70,34 @@ impl Store {
         let dir = dirs::data_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("CyberX");
+        Self::open(dir, None)
+    }
+
+    /// Espace secret : mêmes données, chiffrées avec la clé tirée du code secret.
+    pub fn load_secret(dir: PathBuf, key: crate::crypto::SecretKey) -> Self {
+        Self::open(dir, Some(key))
+    }
+
+    fn open(dir: PathBuf, key: Option<crate::crypto::SecretKey>) -> Self {
         let _ = fs::create_dir_all(&dir);
+        let k = key.as_ref();
         Self {
-            history: read_json(&dir, "history.json"),
-            bookmarks: read_json(&dir, "bookmarks.json"),
-            settings: read_json(&dir, "settings.json"),
+            history: read_json(&dir, k, "history.json"),
+            bookmarks: read_json(&dir, k, "bookmarks.json"),
+            settings: read_json(&dir, k, "settings.json"),
+            key,
             dir,
         }
+    }
+
+    /// Change la clé (nouveau code secret) et réécrit toutes les données.
+    pub fn rekey(&mut self, key: crate::crypto::SecretKey) {
+        let session = self.load_session();
+        self.key = Some(key);
+        self.write("history.json", &self.history);
+        self.write("bookmarks.json", &self.bookmarks);
+        self.write("settings.json", &self.settings);
+        self.save_session(&session);
     }
 
     pub fn dir(&self) -> PathBuf {
@@ -82,9 +105,14 @@ impl Store {
     }
 
     fn write<T: Serialize>(&self, name: &str, value: &T) {
-        let path = self.dir.join(name);
+        let name = file_name(self.key.as_ref(), name);
+        let path = self.dir.join(&name);
         let tmp = self.dir.join(format!("{name}.tmp"));
         if let Ok(data) = serde_json::to_vec_pretty(value) {
+            let data = match &self.key {
+                Some(k) => crate::crypto::seal(k, &data),
+                None => data,
+            };
             if fs::write(&tmp, data).is_ok() {
                 let _ = fs::rename(&tmp, &path);
             }
@@ -161,7 +189,7 @@ impl Store {
     // ---------- Session ----------
 
     pub fn load_session(&self) -> Session {
-        read_json(&self.dir, "session.json")
+        read_json(&self.dir, self.key.as_ref(), "session.json")
     }
 
     pub fn save_session(&self, session: &Session) {
@@ -169,9 +197,32 @@ impl Store {
     }
 }
 
-fn read_json<T: DeserializeOwned + Default>(dir: &PathBuf, name: &str) -> T {
-    fs::read(dir.join(name))
+/// Dans l'espace secret, les fichiers portent des noms neutres.
+fn file_name(key: Option<&crate::crypto::SecretKey>, name: &str) -> String {
+    if key.is_none() {
+        return name.to_string();
+    }
+    match name {
+        "history.json" => "0.dat",
+        "bookmarks.json" => "1.dat",
+        "settings.json" => "2.dat",
+        "session.json" => "3.dat",
+        other => other,
+    }
+    .to_string()
+}
+
+fn read_json<T: DeserializeOwned + Default>(
+    dir: &PathBuf,
+    key: Option<&crate::crypto::SecretKey>,
+    name: &str,
+) -> T {
+    fs::read(dir.join(file_name(key, name)))
         .ok()
+        .and_then(|d| match key {
+            Some(k) => crate::crypto::open(k, &d),
+            None => Some(d),
+        })
         .and_then(|d| serde_json::from_slice(&d).ok())
         .unwrap_or_default()
 }

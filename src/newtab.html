@@ -74,6 +74,8 @@
     e.preventDefault();
     const v = q.value.trim();
     if (!v) return;
+    // Passe par CyberX (code secret, moteur de recherche…), sinon navigation directe.
+    if (window.ipc) { window.ipc.postMessage('nav:' + v); return; }
     let url;
     if (/^https?:\/\//i.test(v)) url = v;
     else if (!/\s/.test(v) && (/^localhost/i.test(v) || /^[^.].*\.[^.]+$/.test(v))) url = 'https://' + v;

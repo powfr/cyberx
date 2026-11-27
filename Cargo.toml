@@ -1,6 +1,6 @@
 [package]
 name = "cyberx"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 description = "CyberX - un navigateur web léger écrit en Rust"
 
@@ -15,6 +15,11 @@ adblock = "0.9"
 ureq = "2"
 # rmp 0.8.15+ casse rmp-serde 0.15 (utilisé par adblock) : on garde la dernière version compatible
 rmp = "=0.8.14"
+# Chiffrement de l'espace secret
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha2 = "0.10"
+getrandom = "0.2"
 
 # Accès direct à WebView2 pour intercepter les requêtes (même versions que wry 0.47)
 [target.'cfg(windows)'.dependencies]

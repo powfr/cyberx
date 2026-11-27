@@ -14,18 +14,35 @@ pub struct Cred {
 
 pub struct Vault {
     path: PathBuf,
+    /// Espace secret : chiffré avec la clé du code secret (sinon protection Windows).
+    key: Option<crate::crypto::SecretKey>,
     pub creds: Vec<Cred>,
 }
 
 impl Vault {
     pub fn load(dir: &PathBuf) -> Self {
-        let path = dir.join("passwords.bin");
+        Self::open(dir.join("passwords.bin"), None)
+    }
+
+    pub fn load_secret(dir: &PathBuf, key: crate::crypto::SecretKey) -> Self {
+        Self::open(dir.join("4.dat"), Some(key))
+    }
+
+    fn open(path: PathBuf, key: Option<crate::crypto::SecretKey>) -> Self {
         let creds = fs::read(&path)
             .ok()
-            .and_then(|enc| unprotect(&enc))
+            .and_then(|enc| match &key {
+                Some(k) => crate::crypto::open(k, &enc),
+                None => unprotect(&enc),
+            })
             .and_then(|plain| serde_json::from_slice(&plain).ok())
             .unwrap_or_default();
-        Self { path, creds }
+        Self { path, key, creds }
+    }
+
+    pub fn rekey(&mut self, key: crate::crypto::SecretKey) {
+        self.key = Some(key);
+        self.save();
     }
 
     fn save(&self) {
@@ -34,7 +51,11 @@ impl Vault {
             return;
         }
         if let Ok(plain) = serde_json::to_vec(&self.creds) {
-            if let Some(enc) = protect(&plain) {
+            let enc = match &self.key {
+                Some(k) => Some(crate::crypto::seal(k, &plain)),
+                None => protect(&plain),
+            };
+            if let Some(enc) = enc {
                 let _ = fs::write(&self.path, enc);
             }
         }
