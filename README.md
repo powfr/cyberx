@@ -41,8 +41,8 @@ CyberX vérifie ensuite tout seul les nouvelles versions au lancement et propose
 ## Publier une nouvelle version
 
 Chaque modification envoyée sur `main` est compilée automatiquement (onglet *Actions*).
-Pour publier : augmenter `version` dans `Cargo.toml`, puis créer une étiquette `vX.Y.Z`
-(`git tag v0.4.0 && git push --tags`). GitHub publie alors `cyberx.exe` dans les Releases.
+Pour publier une nouvelle version, il suffit d'augmenter `version` dans `Cargo.toml` :
+GitHub compile et publie alors automatiquement `cyberx.exe` dans les Releases.
 
 ## Compiler soi-même sur Windows
 

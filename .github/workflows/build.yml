@@ -1,13 +1,12 @@
-# Compile CyberX sur Windows à chaque modification.
-# Quand une version est étiquetée (ex. v0.4.0), publie cyberx.exe dans les Releases :
-# c'est là que CyberX va chercher ses mises à jour.
+# Compile CyberX sur Windows à chaque modification envoyée sur GitHub.
+# Si la version de Cargo.toml n'a pas encore été publiée, crée automatiquement
+# la Release correspondante avec cyberx.exe : c'est là que CyberX va chercher ses mises à jour.
 name: Build
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -26,9 +25,14 @@ jobs:
         with:
           name: cyberx-windows
           path: target/release/cyberx.exe
-      - name: Publier la version
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: target/release/cyberx.exe
-          generate_release_notes: true
+      - name: Publier la nouvelle version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if gh release view "v$V" >/dev/null 2>&1; then
+            echo "La version $V est déjà publiée."
+          else
+            gh release create "v$V" target/release/cyberx.exe --title "CyberX $V" --generate-notes
+          fi
