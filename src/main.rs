@@ -37,8 +37,6 @@ const BORDER: f64 = 4.0;
 const UI_HTML: &str = include_str!("ui.html");
 const NEWTAB_HTML: &str = include_str!("newtab.html");
 const LOGO_SVG: &str = include_str!("../assets/logo.svg");
-/// Icône de la fenêtre : 128×128 pixels RGBA.
-const ICON_RGBA: &[u8] = include_bytes!("../assets/icon-128.rgba");
 
 /// Script injecté dans les pages web : raccourcis clavier quand une page a le focus.
 const SHORTCUTS_JS: &str = r#"
@@ -782,13 +780,25 @@ impl Browser {
     }
 }
 
+/// Icône de la fenêtre : reprise de l'icône intégrée à l'exécutable (voir build.rs).
+#[cfg(windows)]
+fn window_icon() -> Option<tao::window::Icon> {
+    use tao::platform::windows::IconExtWindows;
+    tao::window::Icon::from_resource(1, None).ok()
+}
+
+#[cfg(not(windows))]
+fn window_icon() -> Option<tao::window::Icon> {
+    None
+}
+
 fn main() {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
 
     let window = WindowBuilder::new()
         .with_title("CyberX")
-        .with_window_icon(tao::window::Icon::from_rgba(ICON_RGBA.to_vec(), 128, 128).ok())
+        .with_window_icon(window_icon())
         .with_decorations(false)
         .with_inner_size(LogicalSize::new(1280.0, 820.0))
         .with_min_inner_size(LogicalSize::new(640.0, 400.0))
