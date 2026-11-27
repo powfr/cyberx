@@ -117,3 +117,15 @@ unsafe fn attach_inner(
     core.add_WebResourceRequested(&handler, &mut token)?;
     Ok(())
 }
+
+/// Place une webview au premier plan (ex. la liste de suggestions, par-dessus la page).
+pub fn bring_to_front(webview: &WebView) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, HWND_TOP, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
+    unsafe {
+        let mut hwnd = HWND::default();
+        if webview.controller().ParentWindow(&mut hwnd).is_ok() {
+            let _ = SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+}

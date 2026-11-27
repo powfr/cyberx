@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg:#0a0e17; --surface:#111827; --surface2:#1a2234; --text:#e6f1ff; --muted:#7d8ba6; --accent:#00e5ff; --border:#22304a; }
+  * { box-sizing: border-box; }
+  html, body { margin:0; height:100%; overflow:hidden; }
+  body { background:var(--surface); color:var(--text); font:13px "Segoe UI", system-ui, sans-serif; user-select:none;
+         border:1px solid var(--border); border-radius:0 0 12px 12px; padding:4px 0; }
+  .item { height:36px; display:flex; align-items:center; gap:12px; padding:0 16px; cursor:pointer; }
+  .item.sel, .item:hover { background:var(--surface2); }
+  .ic { width:18px; text-align:center; flex:none; color:var(--muted); }
+  .t { flex:0 1 auto; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .u { flex:1 1 0; min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; color:var(--accent); font-size:12px; }
+  .u::before { content:'— '; color:var(--muted); }
+  .item.search .u::before { content:''; }
+  .item.search .u { color:var(--muted); }
+</style>
+</head>
+<body>
+<div id="list"></div>
+<script>
+  // Appelé par CyberX : render(éléments, index sélectionné, variables du thème, nom du moteur)
+  window.render = function (items, sel, theme, engine) {
+    for (const k in theme) document.documentElement.style.setProperty(k, theme[k]);
+    const list = document.getElementById('list');
+    list.innerHTML = '';
+    items.forEach((it, i) => {
+      const row = document.createElement('div');
+      row.className = 'item ' + it.kind + (i === sel ? ' sel' : '');
+      const ic = document.createElement('span'); ic.className = 'ic';
+      ic.textContent = it.kind === 'search' ? '🔍' : it.kind === 'bm' ? '★' : '🕘';
+      const t = document.createElement('span'); t.className = 't'; t.textContent = it.title;
+      const u = document.createElement('span'); u.className = 'u';
+      u.textContent = it.kind === 'search' ? 'Rechercher avec ' + engine : it.url;
+      row.append(ic, t, u);
+      // mousedown (et non click) : agir avant que la barre d'adresse ne perde le focus.
+      row.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        window.ipc.postMessage(JSON.stringify(it.kind === 'search' ? { search: it.title } : { url: it.url }));
+      });
+      list.append(row);
+    });
+  };
+</script>
+</body>
+</html>

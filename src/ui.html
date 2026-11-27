@@ -165,8 +165,7 @@
     <button class="btn" id="home" title="Accueil">⌂</button>
     <form id="addrwrap" autocomplete="off">
       <span id="lock">🔍</span>
-      <input id="addr" list="sugg" spellcheck="false" placeholder="Rechercher ou saisir une adresse">
-      <datalist id="sugg"></datalist>
+      <input id="addr" spellcheck="false" placeholder="Rechercher ou saisir une adresse">
       <span id="privbadge">Privé</span>
     </form>
     <button class="btn" id="shield" title="Bouclier">🛡<span id="shieldCount"></span></button>
@@ -215,6 +214,18 @@
         <div class="setting" style="display:block">
           <div>Sites où le bouclier est désactivé<small>Cliquez sur 🛡 sur un site pour l'ajouter ou le retirer</small></div>
           <div class="chips" id="allowlist"></div>
+        </div>
+        <h3 style="margin-top:28px">Mots de passe</h3>
+        <div class="setting">
+          <div>Importer depuis Brave, Chrome, Edge ou Firefox
+            <small>Dans Brave : brave://settings/passwords → ⋮ → Exporter les mots de passe, puis choisis le fichier .csv ici.<br>
+            Ils sont chiffrés par Windows et remplis automatiquement sur les sites. Supprime ensuite le fichier exporté.</small></div>
+          <button class="action" id="pwImport">Importer un fichier…</button>
+          <input type="file" id="pwFile" accept=".csv,text/csv" style="display:none">
+        </div>
+        <div class="setting">
+          <div>Mots de passe enregistrés<small id="pwCount">Aucun</small></div>
+          <button class="action danger" id="pwClear">Tout supprimer</button>
         </div>
         <h3 style="margin-top:28px">Paramètres</h3>
         <div class="setting">
@@ -279,7 +290,6 @@
     const a = $('addr');
     if (document.activeElement !== a) a.value = S.url || '';
     $('lock').textContent = S.private ? '🕶' : S.url.startsWith('https://') ? '🔒' : S.url ? '⚠️' : '🔍';
-    $('lock').title = S.url.startsWith('https://') ? 'Connexion sécurisée' : S.url ? 'Connexion non sécurisée' : '';
     $('star').classList.toggle('on', !!S.bookmarked);
     $('star').textContent = S.bookmarked ? '★' : '☆';
     $('reload').textContent = S.loading ? '✕' : '⟳';
@@ -287,8 +297,6 @@
 
     renderShield();
     renderBookmarkBar();
-    const dl = $('sugg'); dl.innerHTML = '';
-    S.suggest.forEach((u) => { const o = document.createElement('option'); o.value = u; dl.append(o); });
 
     $('panel').style.display = S.panelOpen ? 'flex' : 'none';
     $('btnHist').classList.toggle('on', S.panelOpen && section === 'history');
@@ -301,7 +309,6 @@
     const box = $('tabs'); box.innerHTML = '';
     S.tabs.forEach((t) => {
       const d = el('div', 'tab' + (t.id === S.active ? ' active' : '') + (t.private ? ' priv' : ''));
-      d.title = t.title + (t.url ? '\n' + t.url : '');
       const ic = el('span', 'ic' + (t.loading ? ' loading' : ''), t.private ? '🕶' : letter(t.title, t.url));
       const ti = el('span', 'ti', t.title || t.url || 'Nouvel onglet');
       const x = el('button', 'x', '×'); x.title = 'Fermer (Ctrl+W)';
@@ -350,7 +357,7 @@
     }
     if (!S.bookmarks.length) { bar.append(el('span', 'bmempty', 'Cliquez sur ☆ pour ajouter une page à vos favoris')); return; }
     S.bookmarks.forEach((b) => {
-      const btn = el('button', 'bm'); btn.title = b.title + '\n' + b.url;
+      const btn = el('button', 'bm');
       btn.append(el('i', null, letter(b.title, b.url)), el('span', null, b.title || host(b.url)));
       btn.onclick = () => send('open_url', { url: b.url });
       btn.onauxclick = (e) => { if (e.button === 1) send('open_url_new_tab', { url: b.url }); };
@@ -434,6 +441,7 @@
     }
     sel.value = S.settings.search;
     $('ver').textContent = S.version;
+    $('pwCount').textContent = S.passwordCount ? S.passwordCount + ' identifiant(s), chiffrés avec ta session Windows' : 'Aucun';
 
     $('adSwitch').classList.toggle('on', !!S.adblock);
     $('shieldInfo').textContent = S.filtersReady
@@ -473,6 +481,22 @@
   $('wmax').onclick = () => send('toggle_maximize');
   $('wclose').onclick = () => send('close_window');
   $('chkUpd').onclick = () => send('check_update');
+  $('pwImport').onclick = () => $('pwFile').click();
+  $('pwFile').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    send('import_passwords', { csv: await f.text() });
+    e.target.value = '';
+  };
+  let pwClearTimer = null;
+  $('pwClear').onclick = (e) => {
+    const b = e.currentTarget;
+    if (b.classList.contains('confirm')) { send('clear_passwords'); b.classList.remove('confirm'); b.textContent = 'Tout supprimer'; }
+    else {
+      b.classList.add('confirm'); b.textContent = 'Confirmer ?';
+      clearTimeout(pwClearTimer);
+      pwClearTimer = setTimeout(() => { b.classList.remove('confirm'); b.textContent = 'Tout supprimer'; }, 3000);
+    }
+  };
   $('adSwitch').onclick = () => send('set_adblock', { on: !(S && S.adblock) });
   $('updFilters').onclick = (e) => { send('update_filters'); e.currentTarget.textContent = 'Mise à jour lancée…'; };
   $('btnHist').onclick = () => openPanel('history');
@@ -495,10 +519,44 @@
     }
   };
 
+  // ---------- Barre d'adresse et suggestions ----------
   const addr = $('addr');
-  $('addrwrap').onsubmit = (e) => { e.preventDefault(); send('navigate', { value: addr.value }); addr.blur(); };
+  let sugItems = [], sugSel = -1, sugShown = false;
+  function sendSuggest() {
+    if (!sugItems.length && !sugShown) return;
+    sugShown = sugItems.length > 0;
+    const r = $('addrwrap').getBoundingClientRect();
+    send('suggest', { items: sugItems, sel: sugSel, x: r.left + 8, y: r.bottom + 4, w: r.width - 16 });
+  }
+  function hideSuggest() { sugItems = []; sugSel = -1; sendSuggest(); }
+  function computeSuggest() {
+    const q = addr.value.trim();
+    if (!q || !S || document.activeElement !== addr) return hideSuggest();
+    const ql = q.toLowerCase();
+    const items = [{ kind: 'search', title: q, url: '' }];
+    for (const s of S.suggest) {
+      if (items.length >= 8) break;
+      if (s.url.toLowerCase().includes(ql) || (s.title || '').toLowerCase().includes(ql))
+        items.push({ kind: s.kind, title: s.title || s.url, url: s.url });
+    }
+    sugItems = items; sugSel = -1; sendSuggest();
+  }
+  window.cyberx.suggestDone = () => { hideSuggest(); addr.blur(); };
+  $('addrwrap').onsubmit = (e) => {
+    e.preventDefault();
+    const it = sugSel > 0 ? sugItems[sugSel] : null;
+    send('navigate', { value: it ? it.url : addr.value });
+    hideSuggest(); addr.blur();
+  };
+  addr.oninput = computeSuggest;
   addr.onfocus = () => setTimeout(() => addr.select(), 0);
-  addr.onkeydown = (e) => { if (e.key === 'Escape') { addr.value = S ? S.url : ''; addr.blur(); } };
+  addr.onblur = () => setTimeout(hideSuggest, 200);
+  addr.onkeydown = (e) => {
+    if (e.key === 'Escape') { hideSuggest(); addr.value = S ? S.url : ''; addr.blur(); }
+    else if (e.key === 'ArrowDown' && sugItems.length) { e.preventDefault(); sugSel = Math.min(sugItems.length - 1, sugSel + 1); sendSuggest(); }
+    else if (e.key === 'ArrowUp' && sugItems.length) { e.preventDefault(); sugSel = Math.max(-1, sugSel - 1); sendSuggest(); }
+  };
+  window.addEventListener('resize', () => { if (sugShown) sendSuggest(); });
 
   document.addEventListener('keydown', (e) => {
     const k = (e.key || '').toLowerCase(), c = e.ctrlKey || e.metaKey;

@@ -8,6 +8,7 @@
 mod shield;
 #[cfg(windows)]
 mod shield_win;
+mod passwords;
 mod storage;
 mod themes;
 mod updater;
@@ -36,6 +37,7 @@ const BORDER: f64 = 4.0;
 
 const UI_HTML: &str = include_str!("ui.html");
 const NEWTAB_HTML: &str = include_str!("newtab.html");
+const SUGGEST_HTML: &str = include_str!("suggest.html");
 const LOGO_SVG: &str = include_str!("../assets/logo.svg");
 
 /// Script injecté dans les pages web : raccourcis clavier quand une page a le focus.
@@ -103,6 +105,8 @@ enum UserEvent {
     Fullscreen(u32, bool),
     /// Résultat de la recherche de mise à jour : (version, lien) si disponible.
     UpdateCheck { found: Option<(String, String)>, manual: bool },
+    /// Clic sur une suggestion de la barre d'adresse : {"url":…} ou {"search":…}.
+    SuggestPick(String),
     /// Mise à jour installée (chemin de l'exécutable) ou message d'erreur.
     UpdateResult(Result<std::path::PathBuf, String>),
 }
@@ -131,6 +135,9 @@ struct Browser {
     update: Option<(String, String)>,
     /// Message affiché dans la barre : « Mise à jour en cours… », « à jour », erreur.
     update_msg: Option<String>,
+    /// Liste de suggestions affichée sous la barre d'adresse (créée au premier usage).
+    suggest: Option<WebView>,
+    vault: passwords::Vault,
     store: Store,
     ad: Rc<RefCell<AdState>>,
     proxy: EventLoopProxy<UserEvent>,
@@ -312,6 +319,9 @@ impl Browser {
     }
 
     fn layout(&self) {
+        if self.panel_open || self.fullscreen {
+            self.hide_suggest();
+        }
         let (w, h) = self.logical_size();
         if self.fullscreen {
             let _ = self.ui.set_visible(false);
@@ -470,6 +480,68 @@ impl Browser {
         self.refresh_shield_flags();
     }
 
+    // ---------------- Suggestions de la barre d'adresse ----------------
+
+    fn hide_suggest(&self) {
+        if let Some(s) = &self.suggest {
+            let _ = s.set_visible(false);
+        }
+    }
+
+    fn show_suggest(&mut self, v: &Value) {
+        let items = v["items"].as_array().cloned().unwrap_or_default();
+        if items.is_empty() || self.panel_open || self.fullscreen {
+            self.hide_suggest();
+            return;
+        }
+        if self.suggest.is_none() {
+            let p = self.proxy.clone();
+            self.suggest = WebViewBuilder::new()
+                .with_html(SUGGEST_HTML)
+                .with_visible(false)
+                .with_bounds(rect(0.0, 0.0, 10.0, 10.0))
+                .with_ipc_handler(move |req: Request<String>| {
+                    let _ = p.send_event(UserEvent::SuggestPick(req.body().clone()));
+                })
+                .build_as_child(&self.window)
+                .ok();
+        }
+        let Some(s) = &self.suggest else { return };
+        // Position reçue de l'interface, dans ses coordonnées : on ajoute son décalage dans la fenêtre.
+        let b = if self.window.is_maximized() { 0.0 } else { BORDER };
+        let x = v["x"].as_f64().unwrap_or(0.0) + b;
+        let y = v["y"].as_f64().unwrap_or(80.0) + b;
+        let w = v["w"].as_f64().unwrap_or(600.0);
+        let h = items.len() as f64 * 36.0 + 10.0;
+        let _ = s.set_bounds(rect(x, y, w, h));
+        let engine = themes::engine(&self.store.settings.search).name;
+        let _ = s.evaluate_script(&format!(
+            "render({}, {}, {}, {})",
+            js_json(&Value::Array(items)),
+            v["sel"].as_i64().unwrap_or(-1),
+            themes::vars(&self.store.settings.theme),
+            js_json(&json!(engine)),
+        ));
+        let _ = s.set_visible(true);
+        #[cfg(windows)]
+        shield_win::bring_to_front(s);
+    }
+
+    fn pick_suggestion(&mut self, msg: &str) {
+        self.hide_suggest();
+        let Ok(v) = serde_json::from_str::<Value>(msg) else { return };
+        let private = self.active_tab().map(|t| t.private).unwrap_or(false);
+        let url = if let Some(u) = v["url"].as_str().filter(|u| is_web(u)) {
+            u.to_string()
+        } else if let Some(q) = v["search"].as_str() {
+            self.resolve_input(q, private)
+        } else {
+            return;
+        };
+        self.load_in_active(&url);
+        let _ = self.ui.evaluate_script("window.cyberx && cyberx.suggestDone()");
+    }
+
     // ---------------- Messages ----------------
 
     fn handle(&mut self, ev: UserEvent) {
@@ -518,6 +590,7 @@ impl Browser {
                 self.push_state();
                 return;
             }
+            UserEvent::SuggestPick(msg) => self.pick_suggestion(&msg),
             UserEvent::Fullscreen(tab, on) => {
                 if self.active_tab().map(|t| t.id) == Some(tab) {
                     self.set_fullscreen(on);
@@ -529,6 +602,7 @@ impl Browser {
             UserEvent::PageLoad { tab, url, finished } => {
                 let mut record = None;
                 let cosmetic = if finished { self.ad.borrow().cosmetic_script(&url) } else { None };
+                let autofill = if finished { self.vault.autofill_script(&url) } else { None };
                 if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab) {
                     t.url = url.clone();
                     t.loading = !finished;
@@ -536,6 +610,9 @@ impl Browser {
                         t.blocked = 0;
                     }
                     if let Some(js) = &cosmetic {
+                        let _ = t.webview.evaluate_script(js);
+                    }
+                    if let Some(js) = &autofill {
                         let _ = t.webview.evaluate_script(js);
                     }
                     if finished {
@@ -639,6 +716,16 @@ impl Browser {
                 self.store.delete_history(&str_arg("url"), ts);
             }
             "clear_history" => self.store.clear_history(),
+            "suggest" => self.show_suggest(&v),
+            "import_passwords" => {
+                self.update_msg = Some(match self.vault.import_csv(&str_arg("csv")) {
+                    Ok(n) => format!(
+                        "✓ {n} mot(s) de passe importé(s). Pense à supprimer le fichier CSV exporté : il n'est pas chiffré."
+                    ),
+                    Err(e) => format!("Import impossible : {e}"),
+                });
+            }
+            "clear_passwords" => self.vault.clear(),
             "set_theme" => {
                 self.store.settings.theme = themes::get(&str_arg("id")).id.to_string();
                 self.store.save_settings();
@@ -721,14 +808,20 @@ impl Browser {
             })
             .collect();
 
-        // Suggestions pour la barre d'adresse : favoris + 40 dernières pages visitées.
-        let mut suggest: Vec<String> = self.store.bookmarks.iter().map(|b| b.url.clone()).collect();
+        // Suggestions pour la barre d'adresse : favoris, puis pages récentes (sans doublon).
+        let mut seen = std::collections::HashSet::new();
+        let mut suggest: Vec<Value> = Vec::new();
+        for b in &self.store.bookmarks {
+            if seen.insert(b.url.as_str()) {
+                suggest.push(json!({ "url": b.url, "title": b.title, "kind": "bm" }));
+            }
+        }
         for h in self.store.history.iter().rev() {
-            if suggest.len() >= 60 {
+            if suggest.len() >= 400 {
                 break;
             }
-            if !suggest.contains(&h.url) {
-                suggest.push(h.url.clone());
+            if seen.insert(h.url.as_str()) {
+                suggest.push(json!({ "url": h.url, "title": h.title, "kind": "hist" }));
             }
         }
 
@@ -763,6 +856,7 @@ impl Browser {
             "engines": themes::engines_list(),
             "panelOpen": self.panel_open,
             "maximized": self.window.is_maximized(),
+            "passwordCount": self.vault.creds.len(),
             "version": updater::VERSION,
             "update": self.update.as_ref().map(|(v, _)| v.clone()),
             "updateMsg": self.update_msg,
@@ -827,6 +921,8 @@ fn main() {
         should_exit: false,
         update: None,
         update_msg: None,
+        suggest: None,
+        vault: passwords::Vault::load(&Store::load().dir()),
         ad: Rc::new(RefCell::new(AdState::new(true, &[]))),
         store: Store::load(),
         proxy,
