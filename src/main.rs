@@ -248,7 +248,6 @@ impl Browser {
         let p_ipc = self.proxy.clone();
         let p_load = self.proxy.clone();
         let p_title = self.proxy.clone();
-        let p_new = self.proxy.clone();
 
         // Onglet de l'espace secret : cookies et connexions séparés de l'espace normal.
         let builder = match self.secret_ctx.as_mut() {
@@ -272,17 +271,12 @@ impl Browser {
             .with_document_title_changed_handler(move |title| {
                 let _ = p_title.send_event(UserEvent::Title { tab: id, title });
             })
-            .with_new_window_req_handler(move |url| {
-                // Les liens « nouvelle fenêtre » s'ouvrent dans un nouvel onglet.
-                let _ = p_new.send_event(UserEvent::NewWindow { url, private });
-                false
-            })
             .build_as_child(&self.window);
 
         match built {
             Ok(webview) => {
                 #[cfg(windows)]
-                shield_win::attach(&webview, id, self.ad.clone(), self.proxy.clone());
+                shield_win::attach(&webview, id, private, self.ad.clone(), self.proxy.clone());
                 self.tabs.push(Tab {
                     id,
                     webview,

@@ -1,6 +1,6 @@
 [package]
 name = "cyberx"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "CyberX - un navigateur web léger écrit en Rust"
 

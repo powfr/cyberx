@@ -1,5 +1,6 @@
 //! Accès direct à WebView2 (Windows) :
 //! - plein écran des vidéos (YouTube, etc.) ;
+//! - nouvelles fenêtres : liens en nouvel onglet, vraies popups (connexion Google…) conservées ;
 //! - interception des requêtes réseau pour le bouclier, iframes comprises.
 
 use std::{cell::RefCell, rc::Rc};
@@ -7,7 +8,7 @@ use std::{cell::RefCell, rc::Rc};
 use tao::event_loop::EventLoopProxy;
 use webview2_com::{
     take_pwstr, ContainsFullScreenElementChangedEventHandler, Microsoft::Web::WebView2::Win32::*,
-    WebResourceRequestedEventHandler,
+    NewWindowRequestedEventHandler, WebResourceRequestedEventHandler,
 };
 use windows::{
     core::{w, IUnknown, Interface, PWSTR},
@@ -17,8 +18,14 @@ use wry::{WebView, WebViewExtWindows};
 
 use crate::{shield::AdState, UserEvent};
 
-pub fn attach(webview: &WebView, tab: u32, ad: Rc<RefCell<AdState>>, proxy: EventLoopProxy<UserEvent>) {
-    if let Err(e) = unsafe { attach_inner(webview, tab, ad, proxy) } {
+pub fn attach(
+    webview: &WebView,
+    tab: u32,
+    private: bool,
+    ad: Rc<RefCell<AdState>>,
+    proxy: EventLoopProxy<UserEvent>,
+) {
+    if let Err(e) = unsafe { attach_inner(webview, tab, private, ad, proxy) } {
         eprintln!("Bouclier indisponible pour cet onglet : {e}");
     }
 }
@@ -52,10 +59,37 @@ fn request_type(ctx: COREWEBVIEW2_WEB_RESOURCE_CONTEXT) -> &'static str {
 unsafe fn attach_inner(
     webview: &WebView,
     tab: u32,
+    private: bool,
     ad: Rc<RefCell<AdState>>,
     proxy: EventLoopProxy<UserEvent>,
 ) -> windows::core::Result<()> {
     let core = webview.controller().CoreWebView2()?;
+
+    // --- Nouvelles fenêtres.
+    // Une popup demandée avec une taille ou une position (connexion Google, Apple, PayPal…)
+    // doit rester une vraie popup : elle renvoie le résultat à la page qui l'a ouverte, puis se ferme.
+    // Les autres (liens « nouvel onglet ») s'ouvrent dans un onglet CyberX.
+    let p_nw = proxy.clone();
+    let nw_handler = NewWindowRequestedEventHandler::create(Box::new(
+        move |_sender: Option<ICoreWebView2>, args: Option<ICoreWebView2NewWindowRequestedEventArgs>| unsafe {
+            let Some(args) = args else { return Ok(()) };
+            let features = args.WindowFeatures()?;
+            let (mut has_size, mut has_pos) = (BOOL::default(), BOOL::default());
+            features.HasSize(&mut has_size)?;
+            features.HasPosition(&mut has_pos)?;
+            if has_size.as_bool() || has_pos.as_bool() {
+                return Ok(()); // WebView2 ouvre la popup normalement, liée à la page.
+            }
+            let mut uri = PWSTR::null();
+            args.Uri(&mut uri)?;
+            let url = take_pwstr(uri);
+            args.SetHandled(true)?;
+            let _ = p_nw.send_event(UserEvent::NewWindow { url, private });
+            Ok(())
+        },
+    ));
+    let mut nw_token = Default::default();
+    core.add_NewWindowRequested(&nw_handler, &mut nw_token)?;
 
     // --- Plein écran : quand une vidéo passe en plein écran, la fenêtre aussi.
     let p_fs = proxy.clone();
