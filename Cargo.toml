@@ -1,6 +1,6 @@
 [package]
 name = "cyberx"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "CyberX - un navigateur web léger écrit en Rust"
 
@@ -26,6 +26,7 @@ getrandom = "0.2"
 webview2-com = "0.33"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Security_Cryptography",
     "Win32_System_Com",
     "Win32_UI_WindowsAndMessaging",

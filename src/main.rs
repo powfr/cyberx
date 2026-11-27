@@ -63,6 +63,8 @@ const SHORTCUTS_JS: &str = r#"
     else if (c && k === 'h') s = 'history';
     else if (c && k === 'tab') s = e.shiftKey ? 'prev_tab' : 'next_tab';
     else if (c && k === 'k') s = 'palette';
+    else if (k === 'f11') s = 'toggle_fullscreen';
+    else if (k === 'escape' && document.fullscreenElement) { document.exitFullscreen(); s = 'exit_fullscreen'; }
     if (s && window.ipc) { e.preventDefault(); e.stopPropagation(); window.ipc.postMessage(s); }
   }, true);
 })();
@@ -117,6 +119,8 @@ enum UserEvent {
     UpdateCheck { found: Option<(String, String)>, manual: bool },
     /// Clic sur une suggestion de la barre d'adresse : {"url":…} ou {"search":…}.
     SuggestPick(String),
+    /// Recalculer la mise en page (quelques instants après un passage en plein écran).
+    Relayout,
     /// Mise à jour installée (chemin de l'exécutable) ou message d'erreur.
     UpdateResult(Result<std::path::PathBuf, String>),
 }
@@ -146,6 +150,8 @@ struct Browser {
     panel_open: bool,
     fullscreen: bool,
     was_maximized: bool,
+    /// La fenêtre était agrandie avant le plein écran : on la ré-agrandit en sortant.
+    max_before_fullscreen: bool,
     should_exit: bool,
     /// Mise à jour disponible : (version, lien).
     update: Option<(String, String)>,
@@ -346,6 +352,7 @@ impl Browser {
         }
         let (w, h) = self.logical_size();
         if self.fullscreen {
+            let (w, h) = self.monitor_size().unwrap_or((w, h));
             let _ = self.ui.set_visible(false);
             for (i, t) in self.tabs.iter().enumerate() {
                 let _ = t.webview.set_bounds(rect(0.0, 0.0, w, h));
@@ -381,13 +388,45 @@ impl Browser {
             return;
         }
         self.fullscreen = on;
+        if on {
+            // Une fenêtre agrandie passe mal en plein écran sous Windows : on la restaure d'abord.
+            self.max_before_fullscreen = self.window.is_maximized();
+            if self.max_before_fullscreen {
+                self.window.set_maximized(false);
+            }
+        }
+        #[cfg(windows)]
+        shield_win::style_window_frame(&self.window, on);
         self.window
             .set_fullscreen(if on { Some(Fullscreen::Borderless(None)) } else { None });
         if !on {
             // La page est sortie du plein écran via la fenêtre : on la prévient aussi.
             self.eval_active("if (document.fullscreenElement) document.exitFullscreen()");
+            if self.max_before_fullscreen {
+                self.window.set_maximized(true);
+            }
         }
         self.layout();
+        if on {
+            if let Some(t) = self.active_tab() {
+                let _ = t.webview.focus();
+            }
+        }
+        // La fenêtre change de taille un peu après : on recale la page plusieurs fois.
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            for ms in [60, 250, 700] {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                let _ = proxy.send_event(UserEvent::Relayout);
+            }
+        });
+    }
+
+    /// Taille de l'écran (en plein écran, plus fiable que la taille de la fenêtre en cours de changement).
+    fn monitor_size(&self) -> Option<(f64, f64)> {
+        let m = self.window.current_monitor()?;
+        let s = m.size().to_logical::<f64>(m.scale_factor());
+        Some((s.width, s.height))
     }
 
     fn apply_window_background(&self) {
@@ -774,6 +813,10 @@ impl Browser {
                 return;
             }
             UserEvent::SuggestPick(msg) => self.pick_suggestion(&msg),
+            UserEvent::Relayout => {
+                self.layout();
+                return;
+            }
             UserEvent::Fullscreen(tab, on) => {
                 if self.active_tab().map(|t| t.id) == Some(tab) {
                     self.set_fullscreen(on);
@@ -845,6 +888,11 @@ impl Browser {
             "next_tab" => self.cycle_tab(true),
             "prev_tab" => self.cycle_tab(false),
             "palette" => self.toggle_palette(),
+            "toggle_fullscreen" => {
+                let on = !self.fullscreen;
+                self.set_fullscreen(on);
+            }
+            "exit_fullscreen" => self.set_fullscreen(false),
             // Recherche depuis la page « Nouvel onglet » (seulement depuis cette page).
             s if s.starts_with("nav:") => {
                 let from_newtab = self.active_tab().map(|t| t.url.starts_with("http://cyberx.newtab")).unwrap_or(false);
@@ -921,6 +969,11 @@ impl Browser {
             "clear_history" => self.store.clear_history(),
             "suggest" => self.show_suggest(&v),
             "palette" => self.toggle_palette(),
+            "toggle_fullscreen" => {
+                let on = !self.fullscreen;
+                self.set_fullscreen(on);
+            }
+            "exit_fullscreen" => self.set_fullscreen(false),
             "palette_close" => self.close_palette(),
             "open_section" => self.open_panel(&str_arg("section")),
             "set_layout" => {
@@ -1134,6 +1187,7 @@ fn main() {
         panel_open: false,
         fullscreen: false,
         was_maximized: false,
+        max_before_fullscreen: false,
         should_exit: false,
         update: None,
         update_msg: None,
@@ -1157,6 +1211,8 @@ fn main() {
     updater::cleanup_old();
     updater::spawn_check(browser.proxy.clone(), false);
     browser.apply_window_background();
+    #[cfg(windows)]
+    shield_win::style_window_frame(&browser.window, false);
     shield::spawn_load(browser.store.dir().join("filters"), false, browser.proxy.clone());
     browser.restore_session();
     browser.push_state();

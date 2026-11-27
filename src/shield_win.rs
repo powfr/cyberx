@@ -163,3 +163,26 @@ pub fn bring_to_front(webview: &WebView) {
         }
     }
 }
+
+/// Bordure de la fenêtre : pas de liseré de couleur Windows 11 (notre interface a le sien),
+/// et pas de coins arrondis en plein écran.
+pub fn style_window_frame(window: &tao::window::Window, fullscreen: bool) {
+    use tao::platform::windows::WindowExtWindows;
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DEFAULT, DWMWCP_DONOTROUND,
+    };
+    let hwnd = HWND(window.hwnd() as _);
+    unsafe {
+        // DWMWA_COLOR_NONE : aucune bordure colorée.
+        let none: u32 = 0xFFFF_FFFE;
+        let _ = DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &none as *const u32 as *const _, 4);
+        let corner = if fullscreen { DWMWCP_DONOTROUND } else { DWMWCP_DEFAULT };
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &corner as *const _ as *const _,
+            std::mem::size_of_val(&corner) as u32,
+        );
+    }
+}
